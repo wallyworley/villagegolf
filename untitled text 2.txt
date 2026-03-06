@@ -1,0 +1,23 @@
+# Use the official Puppeteer image which includes Chrome dependencies
+FROM ghcr.io/puppeteer/puppeteer:22.4.1
+
+# Switch to root to install app dependencies
+USER root
+
+WORKDIR /usr/src/app
+
+# Copy package files
+COPY package*.json ./
+RUN npm ci
+
+# Copy app source
+COPY . .
+
+# Switch back to non-root user for security
+USER pptruser
+
+# Google Cloud Run expects port 8080
+ENV PORT=8080
+EXPOSE 8080
+
+CMD [ "node", "server.js" ]

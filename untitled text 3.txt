@@ -1,0 +1,3 @@
+gcloud projects add-iam-policy-binding gen-lang-client-0463012934 \
+  --member="serviceAccount:374848509886-compute@developer.gserviceaccount.com" \
+  --role="roles/editor"

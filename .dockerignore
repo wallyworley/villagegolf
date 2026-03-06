@@ -1,0 +1,11 @@
+node_modules
+villages-frontend/node_modules
+villages-frontend/dist
+.git
+.DS_Store
+*.png
+*.jpg
+*.webp
+*.md
+booking_failure_debug.png
+server.log
