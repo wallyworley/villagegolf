@@ -600,11 +600,7 @@ async function registerUser(){
 // ── Header ──
 function updateHeader(name, primary){
   const badge=document.getElementById('hdr-badge');
-  if(primary){
-    badge.innerHTML=`&#127948;&#65039; ${esc(primary.name)} &nbsp;&#183;&nbsp; #${esc(primary.id)}`;
-  } else {
-    badge.innerHTML=`&#127948;&#65039; ${esc(name)}`;
-  }
+  badge.innerHTML=`&#127948;&#65039; ${esc(name)}`;
   badge.style.display='inline-flex';
 }
 
