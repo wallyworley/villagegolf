@@ -112,6 +112,9 @@
     .d-dow { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
     .d-dom { font-size:26px; font-weight:800; line-height:1.1; }
     .d-mon { font-size:11px; color:var(--muted); margin-top:1px; }
+    .d-wx { font-size:11px; color:var(--muted); margin-top:5px; line-height:1.3; }
+    .d-wx-icon { font-size:16px; }
+    .d-wx-temp { font-weight:700; font-size:12px; }
     .d-card.on .d-dow { color:var(--g3); }
 
     .g-list { display:flex; flex-direction:column; gap:8px; }
@@ -373,8 +376,8 @@
     <div class="time-grid five">
       <div class="t-tile" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">Show all</div></div>
       <div class="t-tile" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
-      <div class="t-tile" onclick="setTime('9am \u2013 noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am \u2013 noon</div></div>
-      <div class="t-tile" onclick="setTime('noon \u2013 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon \u2013 2pm</div></div>
+      <div class="t-tile" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
+      <div class="t-tile" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon &#8211; 2pm</div></div>
       <div class="t-tile" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
     </div>
   </div>
@@ -614,6 +617,33 @@ async function switchUser(){
 }
 
 // ── Build dates ──
+// ── Weather helpers ──
+const WX_ICONS={0:'\u2600\uFE0F',1:'\uD83C\uDF24\uFE0F',2:'\u26C5',3:'\u2601\uFE0F',
+  45:'\uD83C\uDF2B\uFE0F',48:'\uD83C\uDF2B\uFE0F',
+  51:'\uD83C\uDF26\uFE0F',53:'\uD83C\uDF26\uFE0F',55:'\uD83C\uDF27\uFE0F',
+  61:'\uD83C\uDF27\uFE0F',63:'\uD83C\uDF27\uFE0F',65:'\uD83C\uDF27\uFE0F',
+  71:'\uD83C\uDF28\uFE0F',73:'\uD83C\uDF28\uFE0F',75:'\uD83C\uDF28\uFE0F',
+  80:'\uD83C\uDF26\uFE0F',81:'\uD83C\uDF27\uFE0F',82:'\uD83C\uDF27\uFE0F',
+  95:'\u26C8\uFE0F',96:'\u26C8\uFE0F',99:'\u26C8\uFE0F'};
+const WX_LABELS={0:'Sunny',1:'Mostly sunny',2:'Partly cloudy',3:'Cloudy',
+  45:'Foggy',48:'Foggy',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
+  61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',75:'Heavy snow',
+  80:'Light showers',81:'Showers',82:'Heavy showers',95:'Thunderstorm',96:'Thunderstorm',99:'Thunderstorm'};
+
+let _wxCache=null;
+async function fetchWeather(){
+  if(_wxCache) return _wxCache;
+  try{
+    const r=await fetch('https://api.open-meteo.com/v1/forecast?latitude=28.93&longitude=-81.98&daily=temperature_2m_max,temperature_2m_min,weathercode&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=7');
+    const d=await r.json();
+    _wxCache={};
+    d.daily.time.forEach((dt,i)=>{
+      _wxCache[dt]={hi:Math.round(d.daily.temperature_2m_max[i]),lo:Math.round(d.daily.temperature_2m_min[i]),code:d.daily.weathercode[i]};
+    });
+    return _wxCache;
+  }catch(e){ return null; }
+}
+
 function buildDates(){
   const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -621,15 +651,31 @@ function buildDates(){
   const grid=document.getElementById('dateGrid');
   grid.innerHTML='';
   const today=new Date();
+  const dateCards=[];
   for(let i=1;i<=3;i++){
     const d=new Date(today); d.setDate(today.getDate()+i);
     const yyyymmdd=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+    const isoDate=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const label=`${FULL[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
     const c=document.createElement('div'); c.className='d-card';
-    c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div>`;
+    c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div><div class="d-wx" id="wx-${isoDate}"></div>`;
     c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; unlock('sec-golfers'); checkFetch(); };
     grid.appendChild(c);
+    dateCards.push(isoDate);
   }
+  // Fetch weather and populate cards
+  fetchWeather().then(wx=>{
+    if(!wx) return;
+    dateCards.forEach(iso=>{
+      const el=document.getElementById('wx-'+iso);
+      const w=wx[iso];
+      if(el&&w){
+        const icon=WX_ICONS[w.code]||'\u2600\uFE0F';
+        const lbl=WX_LABELS[w.code]||'';
+        el.innerHTML=`<span class="d-wx-icon">${icon}</span> <span class="d-wx-temp">${w.hi}\u00B0/${w.lo}\u00B0</span><br>${lbl}`;
+      }
+    });
+  });
 }
 
 // ── Build golfers from BUDDIES ──

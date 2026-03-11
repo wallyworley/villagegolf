@@ -189,14 +189,29 @@ class GolfService:
         self._golf_home_url = page.url
         self._session_ts = _time.time()
 
+    def _navigate_to_golf_home(self, page):
+        """Navigate back to glf100 from any golf page."""
+        url = page.url or ""
+        if "glf100" in url.lower():
+            return
+        if self._golf_home_url:
+            page.goto(self._golf_home_url, wait_until="networkidle", timeout=15000)
+            return
+        # Fallback: derive glf100 URL from current URL
+        import re as _re
+        m = _re.search(r'(https?://[^/]+/)', url)
+        if m:
+            page.goto(m.group(1) + "glf100", wait_until="networkidle", timeout=15000)
+            self._golf_home_url = page.url
+        else:
+            raise RuntimeError("Cannot navigate to golf home — session may be invalid")
+
     def _ensure_logged_in(self, page, tvn_username, tvn_password, golf_password):
         """Avoid re-authentication if an active golf page is already open.
-        Navigates back to glf100 if on a different golf page."""
+        Always ensures we end up on glf100."""
         url = (page.url or "").lower()
         if "thevillages.net" in url and "/glf" in url and "glf000" not in url:
-            # Already logged in — navigate to golf home if not already there
-            if "glf100" not in url and self._golf_home_url:
-                page.goto(self._golf_home_url, wait_until="networkidle", timeout=15000)
+            self._navigate_to_golf_home(page)
             self._session_ts = _time.time()
             return
         self._login(page, tvn_username, tvn_password, golf_password)
