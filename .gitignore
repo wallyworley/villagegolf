@@ -1,0 +1,15 @@
+# Environment — never commit real credentials
+.env
+
+# Session artifacts
+cookies.txt
+users.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# macOS
+.DS_Store

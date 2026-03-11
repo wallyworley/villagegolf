@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="theme-color" content="#1a5c2a"/>
+  <title>Villages Golf</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --g1: #0e3d1c; --g2: #1a5c2a; --g3: #2d8a47;
+      --gl: #f0f9f2; --gb: #c8e6d0;
+      --bg: #f2f5f2; --card: #fff; --text: #1a2e1a; --muted: #6b7c6b;
+      --r: 16px; --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 48px; }
+
+    .hdr { background: linear-gradient(160deg,var(--g1),var(--g2) 55%,var(--g3));
+           color:#fff; padding:28px 20px 22px; text-align:center; }
+    .hdr-icon { font-size:36px; margin-bottom:6px; }
+    .hdr h1 { font-size:23px; font-weight:800; letter-spacing:-.5px; }
+    .hdr .sub { font-size:12px; opacity:.78; margin-top:3px; }
+    .hdr .badge { display:inline-flex; align-items:center; gap:6px;
+                  background:rgba(255,255,255,.15); border-radius:20px;
+                  padding:5px 13px; margin-top:10px; font-size:13px; font-weight:600; }
+
+    #pin-screen { display:flex; flex-direction:column; align-items:center;
+                  justify-content:center; min-height:60vh; padding:24px; }
+    .pin-card { background:var(--card); border-radius:var(--r); padding:28px 24px;
+                width:100%; max-width:340px; box-shadow:var(--shadow); text-align:center; }
+    .pin-card h2 { font-size:18px; font-weight:700; margin-bottom:6px; }
+    .pin-card p  { font-size:13px; color:var(--muted); margin-bottom:20px; }
+    .pin-input { width:100%; border:2px solid #dde8dd; border-radius:12px;
+                 padding:14px; font-size:22px; letter-spacing:8px; text-align:center;
+                 font-weight:700; outline:none; transition:.2s; background:var(--card); color:var(--text); }
+    .pin-input:focus { border-color:var(--g3); }
+    .pin-btn { margin-top:14px; width:100%; background:linear-gradient(135deg,var(--g1),var(--g3));
+               color:#fff; border:none; border-radius:12px; padding:15px;
+               font-size:16px; font-weight:700; cursor:pointer; }
+    .pin-err { color:#c0392b; font-size:13px; margin-top:10px; min-height:18px; }
+
+    /* ── User selection screen ── */
+    #user-screen { display:none; }
+    .user-grid { display:flex; flex-direction:column; gap:10px; margin-bottom:14px; }
+    .u-card { display:flex; align-items:center; gap:12px; border:2px solid #e4eae4;
+              border-radius:13px; padding:13px 15px; cursor:pointer; transition:all .18s; user-select:none; }
+    .u-card:active { transform:scale(.98); }
+    .u-card:hover { border-color:var(--g3); background:var(--gl); }
+    .u-av { width:44px; height:44px; border-radius:50%;
+            background:linear-gradient(135deg,var(--g3),var(--g1));
+            color:#fff; display:flex; align-items:center; justify-content:center;
+            font-weight:800; font-size:14px; flex-shrink:0; }
+    .u-name { font-weight:700; font-size:14px; }
+    .u-sub  { font-size:11px; color:var(--muted); margin-top:1px; }
+    .u-arrow { margin-left:auto; color:var(--muted); font-size:18px; }
+    .u-remove { margin-left:6px; color:#c0392b; font-size:13px; cursor:pointer;
+                opacity:.5; padding:4px 8px; border-radius:8px; }
+    .u-remove:hover { opacity:1; background:rgba(192,57,43,.1); }
+
+    .new-user-card { border:2px dashed #c8d8c8; border-radius:13px; padding:16px;
+                     cursor:pointer; text-align:center; color:var(--g3); font-weight:700;
+                     font-size:14px; transition:all .18s; }
+    .new-user-card:hover { border-color:var(--g3); background:var(--gl); }
+    .user-clear { margin-top:10px; text-align:center; font-size:12px; font-weight:700;
+                  color:var(--g3); cursor:pointer; }
+    .user-clear:hover { opacity:.85; }
+
+    /* ── Registration form ── */
+    #reg-screen { display:none; }
+    .reg-card { background:var(--card); border-radius:var(--r); padding:24px 20px;
+                max-width:400px; margin:0 auto; box-shadow:var(--shadow); }
+    .reg-card h2 { font-size:17px; font-weight:700; margin-bottom:4px; }
+    .reg-card .reg-sub { font-size:12px; color:var(--muted); margin-bottom:10px; }
+    .reg-clear { color:var(--g3); font-size:12px; font-weight:700; cursor:pointer; margin-bottom:12px; }
+    .reg-clear:hover { opacity:.85; }
+    .reg-field { margin-bottom:13px; }
+    .reg-field label { display:block; font-size:12px; font-weight:700; color:var(--muted);
+                       text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+    .reg-field input { width:100%; border:2px solid #dde8dd; border-radius:10px;
+                       padding:12px 14px; font-size:15px; outline:none; transition:.2s;
+                       background:var(--card); color:var(--text); }
+    .reg-field input:focus { border-color:var(--g3); }
+    .reg-btns { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:18px; }
+    .reg-cancel { background:#eee; color:var(--text); border:none; border-radius:12px;
+                  padding:13px; font-size:15px; font-weight:700; cursor:pointer; }
+    .reg-submit { background:linear-gradient(135deg,var(--g1),var(--g3)); color:#fff;
+                  border:none; border-radius:12px; padding:13px; font-size:15px;
+                  font-weight:700; cursor:pointer; }
+    .reg-submit:disabled { opacity:.5; cursor:not-allowed; }
+    .reg-err { color:#c0392b; font-size:13px; margin-top:10px; min-height:18px; text-align:center; }
+
+    #app { display:none; }
+    .wrap { max-width:480px; margin:0 auto; padding:14px; }
+
+    .sec { background:var(--card); border-radius:var(--r); padding:18px 18px 20px;
+           margin-bottom:13px; box-shadow:var(--shadow); transition:opacity .3s; }
+    .sec.dim { opacity:.38; pointer-events:none; }
+    .sec-hdr { display:flex; align-items:center; gap:9px; margin-bottom:15px; }
+    .sec-icon { width:32px; height:32px; border-radius:10px; background:var(--gl);
+                display:flex; align-items:center; justify-content:center; font-size:15px; }
+    .sec-title { font-size:15px; font-weight:700; }
+    .sec-sub   { font-size:11px; color:var(--muted); margin-top:1px; }
+
+    .date-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; }
+    .d-card { border:2px solid #e4eae4; border-radius:13px; padding:13px 6px 11px;
+              text-align:center; cursor:pointer; transition:all .18s; user-select:none; }
+    .d-card:active { transform:scale(.96); }
+    .d-card.on { border-color:var(--g3); background:var(--gl); box-shadow:0 0 0 3px rgba(45,138,71,.15); }
+    .d-dow { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+    .d-dom { font-size:26px; font-weight:800; line-height:1.1; }
+    .d-mon { font-size:11px; color:var(--muted); margin-top:1px; }
+    .d-card.on .d-dow { color:var(--g3); }
+
+    .g-list { display:flex; flex-direction:column; gap:8px; }
+    .g-card { display:flex; align-items:center; gap:11px; border:2px solid #e4eae4;
+              border-radius:13px; padding:10px 13px; cursor:pointer; transition:all .18s; user-select:none; }
+    .g-card:active { transform:scale(.98); }
+    .g-card.on { border-color:var(--g3); background:var(--gl); }
+    .g-av { width:40px; height:40px; border-radius:50%;
+            background:linear-gradient(135deg,var(--g3),var(--g1));
+            color:#fff; display:flex; align-items:center; justify-content:center;
+            font-weight:800; font-size:13px; flex-shrink:0; }
+    .g-name { font-weight:600; font-size:13px; line-height:1.3; }
+    .g-id   { font-size:11px; color:var(--muted); }
+    .g-chk  { margin-left:auto; width:22px; height:22px; border-radius:50%;
+              border:2px solid #dde8dd; display:flex; align-items:center;
+              justify-content:center; font-size:12px; color:transparent;
+              transition:all .18s; flex-shrink:0; }
+    .g-card.on .g-chk { background:var(--g3); border-color:var(--g3); color:#fff; }
+
+    .add-buddy-row { display:flex; gap:8px; margin-top:10px; }
+    .add-buddy-row input { flex:1; border:2px solid #dde8dd; border-radius:10px;
+                           padding:9px 12px; font-size:13px; outline:none;
+                           background:var(--card); color:var(--text); }
+    .add-buddy-row input:focus { border-color:var(--g3); }
+    .add-buddy-btn { background:var(--g3); color:#fff; border:none; border-radius:10px;
+                     padding:9px 14px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .tile { border:2px solid #e4eae4; border-radius:13px; padding:15px 9px;
+            text-align:center; cursor:pointer; transition:all .18s; user-select:none; }
+    .tile:active { transform:scale(.97); }
+    .tile.on { border-color:var(--g3); background:var(--gl); }
+    .tile-ico { font-size:24px; margin-bottom:5px; }
+    .tile-lbl { font-size:13px; font-weight:700; }
+    .tile-sub { font-size:11px; color:var(--muted); margin-top:2px; }
+
+    .tog-row { display:flex; align-items:center; justify-content:space-between; }
+    .tog-lbl { font-size:14px; font-weight:600; }
+    .tog-lbl small { display:block; font-weight:400; font-size:11px; color:var(--muted); margin-top:1px; }
+    .sw { position:relative; width:50px; height:28px; flex-shrink:0; }
+    .sw input { opacity:0; width:0; height:0; }
+    .sw-track { position:absolute; inset:0; background:#dde8dd; border-radius:28px; cursor:pointer; transition:.28s; }
+    .sw-track::before { content:''; position:absolute; width:22px; height:22px; left:3px; top:3px;
+                        background:#fff; border-radius:50%; transition:.28s; box-shadow:0 1px 3px rgba(0,0,0,.2); }
+    .sw input:checked + .sw-track { background:var(--g3); }
+    .sw input:checked + .sw-track::before { transform:translateX(22px); }
+
+    .time-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .time-grid.five { grid-template-columns:repeat(3,1fr); }
+    .time-grid.five .t-tile:last-child { grid-column: 2; }
+    .t-tile { border:2px solid #e4eae4; border-radius:13px; padding:13px 9px;
+              text-align:center; cursor:pointer; transition:all .18s; user-select:none; }
+    .t-tile:active { transform:scale(.97); }
+    .t-tile.on { border-color:var(--g3); background:var(--gl); }
+    .t-ico   { font-size:20px; display:block; margin-bottom:3px; }
+    .t-lbl   { font-size:13px; font-weight:700; }
+    .t-range { font-size:11px; color:var(--muted); margin-top:2px; }
+
+    .fetch-btn { display:block; width:100%;
+                 background:linear-gradient(135deg,var(--g1),var(--g3));
+                 color:#fff; border:none; border-radius:14px; padding:16px;
+                 font-size:16px; font-weight:800; cursor:pointer; transition:.18s;
+                 box-shadow:0 4px 14px rgba(26,92,42,.3); }
+    .fetch-btn:active { transform:scale(.97); }
+    .fetch-btn:disabled { opacity:.4; box-shadow:none; cursor:not-allowed; transform:none; }
+
+    .loader { display:none; flex-direction:column; align-items:center; gap:12px; padding:20px 0; text-align:center; }
+    .loader.show { display:flex; }
+    .spin { width:36px; height:36px; border:3px solid var(--gb); border-top-color:var(--g3);
+            border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .loader-txt { font-size:14px; color:var(--muted); font-weight:500; }
+
+    #results-sec { display:none; }
+    .res-header { font-size:12px; font-weight:800; text-transform:uppercase;
+                  letter-spacing:.7px; color:var(--g3); margin-bottom:10px; }
+    .time-list { display:flex; flex-direction:column; gap:8px; }
+    .time-row { display:flex; align-items:center; justify-content:space-between;
+                border:2px solid #e4eae4; border-radius:13px; padding:12px 14px;
+                cursor:pointer; transition:all .18s; }
+    .time-row:active { transform:scale(.98); }
+    .time-row:hover { border-color:var(--g3); background:var(--gl); }
+    .tr-time { font-size:18px; font-weight:800; }
+    .tr-course { font-size:12px; color:var(--muted); margin-top:2px; }
+    .tr-avail { font-size:12px; background:var(--gl); color:var(--g2);
+                border-radius:8px; padding:3px 9px; font-weight:700; white-space:nowrap; }
+    .no-times { text-align:center; color:var(--muted); font-size:14px; padding:16px 0; }
+
+    .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5);
+               z-index:100; align-items:flex-end; justify-content:center; }
+    .overlay.show { display:flex; }
+    .confirm-sheet { background:var(--card); border-radius:var(--r) var(--r) 0 0;
+                     padding:24px 20px 36px; width:100%; max-width:480px; }
+    .cs-title { font-size:18px; font-weight:800; margin-bottom:4px; }
+    .cs-sub { font-size:13px; color:var(--muted); margin-bottom:20px; }
+    .cs-detail { background:var(--gl); border:1px solid var(--gb); border-radius:12px;
+                 padding:14px 16px; margin-bottom:20px; }
+    .cs-row { display:flex; justify-content:space-between; font-size:14px;
+              padding:3px 0; border-bottom:1px solid rgba(45,138,71,.12); }
+    .cs-row:last-child { border:none; }
+    .cs-row span:first-child { color:var(--muted); }
+    .cs-row span:last-child { font-weight:700; }
+    .cs-btns { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .cs-cancel { background:#eee; color:var(--text); border:none; border-radius:12px;
+                 padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
+    .cs-book { background:linear-gradient(135deg,var(--g1),var(--g3)); color:#fff;
+               border:none; border-radius:12px; padding:14px; font-size:15px;
+               font-weight:700; cursor:pointer; }
+    .cs-book:disabled { opacity:.5; cursor:not-allowed; }
+
+    #success-sec { display:none; text-align:center; padding:20px 0 10px; }
+    .success-icon { font-size:56px; margin-bottom:12px; }
+    .success-title { font-size:22px; font-weight:800; color:var(--g2); margin-bottom:4px; }
+    .success-sub { font-size:14px; color:var(--muted); margin-bottom:20px; }
+    .conf-card { background:var(--gl); border:1px solid var(--gb); border-radius:14px;
+                 padding:16px; margin-bottom:20px; text-align:left; }
+    .conf-row { display:flex; justify-content:space-between; font-size:14px;
+                padding:4px 0; border-bottom:1px solid rgba(45,138,71,.12); }
+    .conf-row:last-child { border:none; }
+    .conf-row span:first-child { color:var(--muted); }
+    .conf-row span:last-child { font-weight:700; }
+    .again-btn { display:block; width:100%; background:#eee; color:var(--text);
+                 border:none; border-radius:14px; padding:15px; font-size:15px; font-weight:700; cursor:pointer; }
+
+    .err-banner { background:#fdecea; border:1px solid #f5c6cb; border-radius:12px;
+                  padding:12px 14px; margin-bottom:12px; font-size:13px; color:#c0392b; display:none; }
+    .err-banner.show { display:block; }
+
+    .switch-user { display:block; text-align:center; margin-top:8px;
+                   font-size:13px; color:var(--muted); cursor:pointer; }
+    .switch-user:hover { color:var(--g3); }
+
+    @media (prefers-color-scheme:dark) {
+      :root { --bg:#101e10; --card:#1a2e1a; --text:#e8f5e8; --muted:#8faa8f;
+              --gl:#1e3d22; --gb:#2d5235; --shadow:0 2px 12px rgba(0,0,0,.3); }
+      .d-card,.g-card,.tile,.t-tile,.time-row,.u-card { border-color:#2a422a; }
+      .new-user-card { border-color:#2a422a; }
+      .cs-cancel,.again-btn,.reg-cancel { background:#2a3a2a; color:var(--text); }
+      .err-banner { background:#3d1010; border-color:#7a2020; color:#f08080; }
+      .reg-field input,.add-buddy-row input { border-color:#2a422a; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-icon">&#9971;</div>
+  <h1>Villages Golf</h1>
+  <p class="sub">Tee Time Booking</p>
+  <div class="badge" id="hdr-badge" style="display:none"></div>
+</div>
+
+<!-- ── PIN Screen ── -->
+<div id="pin-screen">
+  <div class="pin-card">
+    <h2>Welcome</h2>
+    <p>Enter the app PIN to continue</p>
+    <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
+           maxlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;" autocomplete="off"
+           onkeydown="if(event.key==='Enter')submitPin()"/>
+    <button class="pin-btn" onclick="submitPin()">Unlock &#x203A;</button>
+    <div class="pin-err" id="pin-err"></div>
+  </div>
+</div>
+
+<!-- ── User Selection Screen ── -->
+<div id="user-screen">
+  <div class="wrap">
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon">&#128100;</div>
+        <div><div class="sec-title">Who's Playing?</div><div class="sec-sub">Select your profile or add a new one</div></div>
+      </div>
+      <div class="user-grid" id="userGrid"></div>
+      <div class="new-user-card" onclick="showRegister()">+ New Golfer</div>
+      <div class="user-clear" onclick="clearSavedCreds()">Clear saved credentials</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Registration Screen ── -->
+<div id="reg-screen">
+  <div class="wrap">
+    <div class="reg-card">
+      <h2>Add Your Profile</h2>
+      <p class="reg-sub">Enter your Villages login credentials. They'll be saved for future use.</p>
+      <div class="reg-clear" onclick="clearSavedCredsAndForm()">Clear saved credentials</div>
+      <div class="reg-field">
+        <label>TVN Username</label>
+        <input id="reg-user" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
+      </div>
+      <div class="reg-field">
+        <label>TVN Password</label>
+        <input id="reg-pass" type="password" autocomplete="current-password" placeholder="Your thevillages.net password"/>
+      </div>
+      <div class="reg-field">
+        <label>Golf PIN</label>
+        <input id="reg-gpin" type="password" inputmode="numeric" maxlength="10" placeholder="Golf system PIN"/>
+      </div>
+      <div class="reg-btns">
+        <button class="reg-cancel" onclick="showUserSelect()">Cancel</button>
+        <button class="reg-submit" id="reg-btn" onclick="registerUser()">Connect</button>
+      </div>
+      <div class="reg-err" id="reg-err"></div>
+    </div>
+    <div id="reg-loader" class="sec" style="display:none; margin-top:14px;">
+      <div class="loader show">
+        <div class="spin"></div>
+        <div class="loader-txt">Logging in and fetching your golfer list...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main App ── -->
+<div id="app">
+<div class="wrap">
+
+  <div class="sec" id="sec-date">
+    <div class="sec-hdr"><div class="sec-icon">&#128197;</div>
+      <div><div class="sec-title">Play Date</div><div class="sec-sub">Select when you'd like to play</div></div>
+    </div>
+    <div class="date-grid" id="dateGrid"></div>
+  </div>
+
+  <div class="sec dim" id="sec-golfers">
+    <div class="sec-hdr"><div class="sec-icon">&#127948;&#65039;</div>
+      <div><div class="sec-title">Golfers</div><div class="sec-sub">Select everyone in your group</div></div>
+    </div>
+    <div class="g-list" id="golferList"></div>
+    <div class="add-buddy-row" id="addBuddyRow">
+      <input id="buddy-id-input" type="text" inputmode="numeric" placeholder="Golfer ID"/>
+      <input id="buddy-name-input" type="text" placeholder="Name (optional)"/>
+      <button class="add-buddy-btn" onclick="addBuddy()">Add</button>
+    </div>
+  </div>
+
+  <div class="sec dim" id="sec-course">
+    <div class="sec-hdr"><div class="sec-icon">&#127942;</div>
+      <div><div class="sec-title">Course &amp; Guests</div><div class="sec-sub">Course type and guest info</div></div>
+    </div>
+    <div class="two" style="margin-bottom:14px;">
+      <div class="tile on" id="t-exec" onclick="setCourse('Executive')">
+        <div class="tile-ico">&#128994;</div><div class="tile-lbl">Executive</div><div class="tile-sub">Shorter course</div>
+      </div>
+      <div class="tile" id="t-champ" onclick="setCourse('Championship')">
+        <div class="tile-ico">&#127942;</div><div class="tile-lbl">Championship</div><div class="tile-sub">Full 18 holes</div>
+      </div>
+    </div>
+    <div class="tog-row">
+      <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
+      <label class="sw"><input type="checkbox" id="guestTog" onchange="S.guests=this.checked"/><span class="sw-track"></span></label>
+    </div>
+  </div>
+
+  <div class="sec dim" id="sec-time">
+    <div class="sec-hdr"><div class="sec-icon">&#9200;</div>
+      <div><div class="sec-title">Time Preference</div><div class="sec-sub">When would you like to tee off?</div></div>
+    </div>
+    <div class="time-grid five">
+      <div class="t-tile" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">Show all</div></div>
+      <div class="t-tile" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
+      <div class="t-tile" onclick="setTime('9am \u2013 noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am \u2013 noon</div></div>
+      <div class="t-tile" onclick="setTime('noon \u2013 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon \u2013 2pm</div></div>
+      <div class="t-tile" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
+    </div>
+  </div>
+
+  <div class="err-banner" id="errBanner"></div>
+
+  <div class="sec dim" id="sec-fetch">
+    <button class="fetch-btn" id="fetchBtn" onclick="fetchTimes()" disabled>
+      &#128270; Find Available Tee Times
+    </button>
+  </div>
+
+  <div class="sec" id="loaderSec" style="display:none;">
+    <div class="loader show">
+      <div class="spin"></div>
+      <div class="loader-txt" id="loaderTxt">Logging in to The Villages...</div>
+    </div>
+  </div>
+
+  <div class="sec" id="results-sec">
+    <div class="res-header" id="res-header">Available Tee Times</div>
+    <div class="time-list" id="timeList"></div>
+  </div>
+
+  <div class="sec" id="success-sec">
+    <div class="success-icon">&#127881;</div>
+    <div class="success-title">Tee Time Booked!</div>
+    <div class="success-sub" id="success-sub"></div>
+    <div class="conf-card" id="conf-card"></div>
+    <button class="again-btn" onclick="resetApp()">&#9971; Book Another Time</button>
+  </div>
+
+  <div class="switch-user" onclick="switchUser()">&#8592; Switch Golfer</div>
+
+</div>
+</div>
+
+<!-- ── Confirm overlay ── -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeConfirm()">
+  <div class="confirm-sheet">
+    <div class="cs-title">Confirm Booking</div>
+    <div class="cs-sub">Ready to lock in this tee time?</div>
+    <div class="cs-detail" id="cs-detail"></div>
+    <div class="cs-btns">
+      <button class="cs-cancel" onclick="closeConfirm()">Cancel</button>
+      <button class="cs-book" id="cs-book-btn" onclick="confirmBook()">&#9971; Book It!</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){ const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
+
+// ── State ──
+let BUDDIES = [];  // populated from server after user selection
+const S = { date:null,dateLabel:null,golfers:[],course:'Executive',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null };
+const CREDS_KEY = 'villagesGolfCredsV1';
+
+function getSavedCreds(){
+  try{
+    const raw=localStorage.getItem(CREDS_KEY);
+    if(!raw) return null;
+    const parsed=JSON.parse(raw);
+    if(!parsed || !parsed.username || !parsed.password || !parsed.golf_pin) return null;
+    return parsed;
+  }catch(_){
+    return null;
+  }
+}
+
+function saveCreds(username, password, golfPin){
+  try{
+    localStorage.setItem(CREDS_KEY, JSON.stringify({
+      username:String(username||'').trim(),
+      password:String(password||''),
+      golf_pin:String(golfPin||'').trim(),
+    }));
+  }catch(_){}
+}
+
+function clearSavedCreds(){
+  try{ localStorage.removeItem(CREDS_KEY); }catch(_){}
+}
+
+function clearSavedCredsAndForm(){
+  clearSavedCreds();
+  document.getElementById('reg-user').value='';
+  document.getElementById('reg-pass').value='';
+  document.getElementById('reg-gpin').value='';
+}
+
+// ── Init: restore session on page load ──
+(async function init(){
+  try{
+    const r=await fetch('/api/session');
+    const d=await r.json();
+    if(!d.auth){ showScreen('pin-screen'); return; }
+    // Always require explicit golfer selection after unlock.
+    loadUserSelect();
+  }catch(e){ showScreen('pin-screen'); }
+})();
+
+// ── Screens ──
+function showScreen(id){
+  ['pin-screen','user-screen','reg-screen','app'].forEach(s=>document.getElementById(s).style.display='none');
+  document.getElementById(id).style.display = id==='pin-screen' ? 'flex' : 'block';
+}
+
+// ── PIN ──
+async function submitPin(){
+  const pin=document.getElementById('pin-input').value.trim();
+  const err=document.getElementById('pin-err');
+  err.textContent='';
+  try{
+    const r=await fetch('/api/verify-pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
+    const d=await r.json();
+    if(d.ok){ loadUserSelect(); }
+    else{ err.textContent=d.error||'Incorrect PIN'; document.getElementById('pin-input').value=''; }
+  }catch(e){ err.textContent='Connection error. Try again.'; }
+}
+
+// ── User Selection ──
+async function loadUserSelect(){
+  try{
+    const r=await fetch('/api/users');
+    const d=await r.json();
+    const users=d.users||[];
+    if(users.length===0){ showRegister(); return; }
+    renderUserGrid(users);
+    showScreen('user-screen');
+  }catch(e){ showRegister(); }
+}
+
+function renderUserGrid(users){
+  const grid=document.getElementById('userGrid');
+  grid.innerHTML='';
+  users.forEach(u=>{
+    const c=document.createElement('div'); c.className='u-card';
+    c.innerHTML=`<div class="u-av">${esc(u.initials||'?')}</div>
+      <div><div class="u-name">${esc(u.display_name)}</div><div class="u-sub">${esc(u.username)}</div></div>
+      <div class="u-arrow">&#x203A;</div>`;
+    c.onclick=(e)=>{ if(!e.target.closest('.u-remove')) selectUser(u.username); };
+    // Add remove button
+    const rm=document.createElement('span'); rm.className='u-remove'; rm.innerHTML='&#x2715;';
+    rm.onclick=(e)=>{ e.stopPropagation(); removeUser(u.username, u.display_name); };
+    c.appendChild(rm);
+    grid.appendChild(c);
+  });
+}
+
+async function selectUser(username){
+  try{
+    const r=await fetch('/api/select-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});
+    const d=await r.json();
+    if(d.ok){
+      BUDDIES=d.buddies||[];
+      updateHeader(d.display_name, d.primary);
+      buildGolfers();
+      buildDates();
+      showScreen('app');
+    }
+  }catch(e){ alert('Error selecting user.'); }
+}
+
+async function removeUser(username, name){
+  if(!confirm(`Remove ${name}? They can re-register later.`)) return;
+  try{
+    await fetch('/api/remove-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});
+    const saved=getSavedCreds();
+    if(saved && String(saved.username||'').trim()===String(username||'').trim()){
+      clearSavedCreds();
+    }
+    loadUserSelect();
+  }catch(e){}
+}
+
+function showRegister(){
+  const saved=getSavedCreds();
+  document.getElementById('reg-user').value=saved?.username||'';
+  document.getElementById('reg-pass').value=saved?.password||'';
+  document.getElementById('reg-gpin').value=saved?.golf_pin||'';
+  document.getElementById('reg-err').textContent='';
+  showScreen('reg-screen');
+}
+
+function showUserSelect(){ loadUserSelect(); }
+
+async function registerUser(){
+  const user=document.getElementById('reg-user').value.trim();
+  const pass=document.getElementById('reg-pass').value;
+  const gpin=document.getElementById('reg-gpin').value.trim();
+  const err=document.getElementById('reg-err');
+  err.textContent='';
+
+  if(!user||!pass||!gpin){ err.textContent='All fields are required.'; return; }
+
+  document.getElementById('reg-btn').disabled=true;
+  document.getElementById('reg-loader').style.display='block';
+
+  try{
+    const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass,golf_pin:gpin})});
+    const d=await r.json();
+    document.getElementById('reg-loader').style.display='none';
+    document.getElementById('reg-btn').disabled=false;
+
+    if(d.ok){
+      saveCreds(user, pass, gpin);
+      BUDDIES=d.buddies||[];
+      updateHeader(d.display_name, d.primary);
+      buildGolfers();
+      buildDates();
+      showScreen('app');
+    } else {
+      err.textContent=d.error||'Registration failed.';
+    }
+  }catch(e){
+    document.getElementById('reg-loader').style.display='none';
+    document.getElementById('reg-btn').disabled=false;
+    err.textContent='Connection error. Try again.';
+  }
+}
+
+// ── Header ──
+function updateHeader(name, primary){
+  const badge=document.getElementById('hdr-badge');
+  if(primary){
+    badge.innerHTML=`&#127948;&#65039; ${esc(primary.name)} &nbsp;&#183;&nbsp; #${esc(primary.id)}`;
+  } else {
+    badge.innerHTML=`&#127948;&#65039; ${esc(name)}`;
+  }
+  badge.style.display='inline-flex';
+}
+
+// ── Switch user ──
+async function switchUser(){
+  try{
+    await fetch('/api/clear-user',{method:'POST'});
+  }catch(e){}
+  resetApp();
+  loadUserSelect();
+}
+
+// ── Build dates ──
+function buildDates(){
+  const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const FULL=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const grid=document.getElementById('dateGrid');
+  grid.innerHTML='';
+  const today=new Date();
+  for(let i=1;i<=3;i++){
+    const d=new Date(today); d.setDate(today.getDate()+i);
+    const yyyymmdd=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+    const label=`${FULL[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    const c=document.createElement('div'); c.className='d-card';
+    c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div>`;
+    c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; unlock('sec-golfers'); checkFetch(); };
+    grid.appendChild(c);
+  }
+}
+
+// ── Build golfers from BUDDIES ──
+function buildGolfers(){
+  const list=document.getElementById('golferList');
+  list.innerHTML='';
+  S.golfers=[];
+  BUDDIES.forEach(g=>{
+    const c=document.createElement('div'); c.className='g-card'; c.dataset.id=g.id;
+    c.innerHTML=`<div class="g-av">${esc(g.initials||'?')}</div><div><div class="g-name">${esc(g.name)}</div><div class="g-id">ID ${esc(g.id)}</div></div><div class="g-chk">&#10003;</div>`;
+    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
+    list.appendChild(c);
+  });
+}
+
+// ── Add buddy by ID ──
+async function addBuddy(){
+  const idInput=document.getElementById('buddy-id-input');
+  const nameInput=document.getElementById('buddy-name-input');
+  const gid=idInput.value.trim();
+  const gname=nameInput.value.trim();
+  if(!gid){ return; }
+  try{
+    const r=await fetch('/api/add-buddy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:gid,name:gname})});
+    const d=await r.json();
+    if(d.ok){
+      BUDDIES=d.buddies;
+      buildGolfers();
+      idInput.value=''; nameInput.value='';
+    } else { showError(d.error||'Could not add golfer.'); }
+  }catch(e){ showError('Connection error.'); }
+}
+
+function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); unlock('sec-time'); checkFetch(); }
+function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>x.classList.remove('on')); el.classList.add('on'); unlock('sec-fetch'); checkFetch(); }
+function unlock(id){ document.getElementById(id).classList.remove('dim'); }
+function checkFetch(){ const ok=S.date&&S.golfers.length>0&&S.timeFilter; document.getElementById('fetchBtn').disabled=!ok; if(ok) unlock('sec-fetch'); }
+
+async function fetchTimes(){
+  showError('');
+  document.getElementById('results-sec').style.display='none';
+  document.getElementById('success-sec').style.display='none';
+  const loader=document.getElementById('loaderSec'); loader.style.display='block';
+  const ltxt=document.getElementById('loaderTxt');
+  const msgs=['Logging in to The Villages\u2026','Navigating to golf system\u2026','Fetching available tee times\u2026','Almost there\u2026'];
+  let mi=0; const iv=setInterval(()=>{ if(mi<msgs.length-1) ltxt.textContent=msgs[++mi]; },3500);
+  try{
+    const r=await fetch('/api/tee-times',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,time_filter:S.timeFilter})});
+    const d=await r.json();
+    clearInterval(iv); loader.style.display='none';
+    if(!d.success){ showError(d.error||'Failed to fetch tee times.'); return; }
+    renderTimes(d.times,d.date_label);
+  }catch(e){ clearInterval(iv); loader.style.display='none'; showError('Network error \u2014 check your connection.'); }
+}
+
+function renderTimes(times,label){
+  const sec=document.getElementById('results-sec'); const list=document.getElementById('timeList');
+  list.innerHTML=''; sec.style.display='block';
+  document.getElementById('res-header').textContent=`Available Times \u00b7 ${label}`;
+  if(!times||times.length===0){ list.innerHTML='<div class="no-times">No tee times found for that preference.<br>Try a different time or date.</div>'; return; }
+  times.forEach(t=>{
+    const row=document.createElement('div'); row.className='time-row';
+    row.innerHTML=`<div><div class="tr-time">${esc(t.display_time)}</div><div class="tr-course">${esc(t.course)}</div></div><div class="tr-avail">${esc(t.available)} open</div>`;
+    row.onclick=()=>openConfirm(t); list.appendChild(row);
+  });
+  sec.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function openConfirm(t){
+  S.pendingCourse=t.course; S.pendingTime=t.time; S.pendingDisplay=t.display_time;
+  const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name.split(' ')[0]||id)).join(', ');
+  document.getElementById('cs-detail').innerHTML=`<div class="cs-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="cs-row"><span>Time</span><span>${esc(t.display_time)}</span></div><div class="cs-row"><span>Course</span><span>${esc(t.course)}</span></div><div class="cs-row"><span>Golfers</span><span>${names}</span></div><div class="cs-row"><span>Guests</span><span>${S.guests?'Yes':'No'}</span></div>`;
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('cs-book-btn').disabled=false;
+  document.getElementById('cs-book-btn').textContent='\u26F3 Book It!';
+}
+function closeConfirm(){ document.getElementById('overlay').classList.remove('show'); }
+
+async function confirmBook(){
+  const btn=document.getElementById('cs-book-btn'); btn.disabled=true; btn.textContent='Booking\u2026';
+  try{
+    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
+    const d=await r.json(); closeConfirm();
+    if(!d.success){ showError(d.error||'Booking failed.'); return; }
+    showSuccess(d);
+  }catch(e){ closeConfirm(); showError('Network error during booking.'); }
+}
+
+function showSuccess(d){
+  document.getElementById('results-sec').style.display='none';
+  const sec=document.getElementById('success-sec'); sec.style.display='block';
+  document.getElementById('success-sub').textContent=`Reservation #${d.reservation_no} confirmed`;
+  const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name||id)).join('<br>');
+  document.getElementById('conf-card').innerHTML=`<div class="conf-row"><span>Reservation #</span><span>${esc(d.reservation_no)}</span></div><div class="conf-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="conf-row"><span>Time</span><span>${esc(d.display_time)}</span></div><div class="conf-row"><span>Course</span><span>${esc(d.course)}</span></div><div class="conf-row"><span>Golfers</span><span>${names}</span></div>`;
+  sec.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth'});}else{b.textContent='';b.classList.remove('show');} }
+
+function resetApp(){
+  S.date=null;S.dateLabel=null;S.golfers=[];S.course='Executive';S.guests=false;S.timeFilter=null;
+  document.querySelectorAll('.d-card,.g-card,.t-tile').forEach(x=>x.classList.remove('on'));
+  document.getElementById('t-exec').classList.add('on');
+  document.getElementById('guestTog').checked=false;
+  ['sec-golfers','sec-course','sec-time','sec-fetch'].forEach(id=>document.getElementById(id).classList.add('dim'));
+  document.getElementById('results-sec').style.display='none';
+  document.getElementById('success-sec').style.display='none';
+  document.getElementById('loaderSec').style.display='none';
+  document.getElementById('fetchBtn').disabled=true;
+  showError(''); window.scrollTo({top:0,behavior:'smooth'});
+}
+</script>
+</body>
+</html>
