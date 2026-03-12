@@ -7,10 +7,11 @@ Estimated time: **20–30 minutes** (most of it is waiting for builds).
 
 ## What You'll Need
 - A Google Cloud account ✓
-- Your Villages credentials:
-  - TVN username & password (login to thevillages.net)
-  - Golf system password (the second password at the golf screen)
 - A PIN you'll use to unlock the app on your phone (any 4+ digits)
+- A verified sender set up in MailerSend:
+  - API token
+  - From email address
+  - Optional from name
 
 ---
 
@@ -45,7 +46,7 @@ cd ~/Documents/villages-golf-app
 
 ## Step 4 — Deploy to Cloud Run
 
-Copy this command, fill in your credentials, then run it in Terminal:
+Copy this command, fill in your values, then run it in Terminal:
 
 ```bash
 gcloud run deploy villages-golf \
@@ -54,23 +55,77 @@ gcloud run deploy villages-golf \
   --allow-unauthenticated \
   --memory 2Gi \
   --timeout 180 \
-  --set-env-vars "TVN_USERNAME=YOUR_TVN_USERNAME" \
-  --set-env-vars "TVN_PASSWORD=YOUR_TVN_PASSWORD" \
-  --set-env-vars "GOLF_PASSWORD=YOUR_GOLF_PASSWORD" \
-  --set-env-vars "PRIMARY_GOLFER_ID=483204" \
   --set-env-vars "APP_PIN=YOUR_CHOSEN_PIN" \
+  --set-env-vars "MAILERSEND_API_TOKEN=YOUR_MAILERSEND_API_TOKEN" \
+  --set-env-vars "MAIL_FROM_EMAIL=YOUR_VERIFIED_FROM_EMAIL" \
+  --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
   --set-env-vars "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 ```
 
 Replace:
 | Placeholder | Replace with |
 |---|---|
-| `YOUR_TVN_USERNAME` | Your thevillages.net username |
-| `YOUR_TVN_PASSWORD` | Your thevillages.net password |
-| `YOUR_GOLF_PASSWORD` | Your golf system password |
 | `YOUR_CHOSEN_PIN` | A PIN to unlock the app (e.g. `7291`) |
+| `YOUR_MAILERSEND_API_TOKEN` | Your MailerSend API token |
+| `YOUR_VERIFIED_FROM_EMAIL` | A sender address verified in MailerSend |
 
 Build takes about 5–8 minutes.
+
+The app no longer stores Villages credentials in Cloud Run environment variables. Each golfer enters their own Villages username, password, and golf PIN inside the app when registering.
+
+### How Environment Variables Work
+
+The `--set-env-vars` lines in the deploy command are where you add your MailerSend settings.
+
+Example:
+
+```bash
+--set-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE"
+```
+
+Replace only the value to the right of the `=` sign. Do not add extra quotes inside the value.
+
+### Full Example
+
+```bash
+gcloud run deploy villages-golf \
+  --source . \
+  --region us-east1 \
+  --allow-unauthenticated \
+  --memory 2Gi \
+  --timeout 180 \
+  --set-env-vars "APP_PIN=7291" \
+  --set-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE" \
+  --set-env-vars "MAIL_FROM_EMAIL=your-verified-sender@example.com" \
+  --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
+  --set-env-vars "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
+Replace:
+| Placeholder | Replace with |
+|---|---|
+| `YOUR_NEW_TOKEN_HERE` | Your MailerSend API token |
+| `your-verified-sender@example.com` | A sender address verified in MailerSend |
+| `7291` | Your app PIN |
+
+Important:
+- Since your previous MailerSend token was exposed, rotate it in MailerSend first and use the new token in this command.
+- `MAIL_FROM_EMAIL` must be a verified MailerSend sender address or email sending will fail.
+
+### First Deploy Checklist
+
+1. Verify your sending domain or single sender email in MailerSend.
+2. Create a new MailerSend API token with email sending permission.
+3. Confirm the exact sender address you will use for `MAIL_FROM_EMAIL`.
+4. Run the deploy command above.
+5. Open the app after deploy and register a golfer profile.
+6. Enter your own email address in the email notifications field.
+7. Complete a test booking and confirm the email arrives.
+8. If email fails, read the Cloud Run logs:
+
+```bash
+gcloud run services logs read villages-golf --region us-east1
+```
 
 ---
 
@@ -94,12 +149,20 @@ Open it in any browser and bookmark it on your phone.
 
 ---
 
-## Updating Credentials Later
+## Updating Mail Settings Later
 
 ```bash
 gcloud run services update villages-golf \
   --region us-east1 \
-  --update-env-vars "TVN_PASSWORD=NEW_PASSWORD"
+  --update-env-vars "MAILERSEND_API_TOKEN=NEW_TOKEN"
+```
+
+If you want to update all mail settings at once, use:
+
+```bash
+gcloud run services update villages-golf \
+  --region us-east1 \
+  --update-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE,MAIL_FROM_EMAIL=your-verified-sender@example.com,MAIL_FROM_NAME=Villages Golf"
 ```
 
 ---
@@ -112,7 +175,9 @@ Cloud Run free tier covers ~2–3 bookings/week at **$0/month**.
 
 ## Troubleshooting
 
-**"Login failed"** — Check TVN_USERNAME / TVN_PASSWORD, update with command above.
+**"Email not sending"** — Check `MAILERSEND_API_TOKEN` and `MAIL_FROM_EMAIL`, and make sure the sender is verified in MailerSend.
+
+**"Login failed"** — Check the Villages username, password, and golf PIN entered during registration.
 
 **"Page timed out"** — The Villages site may be slow; try again in a few minutes.
 

@@ -243,6 +243,15 @@
                   padding:12px 14px; margin-bottom:12px; font-size:13px; color:#c0392b; display:none; }
     .err-banner.show { display:block; }
 
+    .contact-row { display:flex; gap:8px; }
+    .contact-input { flex:1; border:2px solid #dde8dd; border-radius:10px;
+                     padding:10px 12px; font-size:14px; outline:none;
+                     background:var(--card); color:var(--text); transition:.2s; }
+    .contact-input:focus { border-color:var(--g3); }
+    .contact-save-btn { background:var(--g3); color:#fff; border:none; border-radius:10px;
+                        padding:10px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+    .contact-status { font-size:12px; color:var(--g2); margin-top:6px; min-height:16px; }
+
     .switch-user { display:block; text-align:center; margin-top:8px;
                    font-size:13px; color:var(--muted); cursor:pointer; }
     .switch-user:hover { color:var(--g3); }
@@ -254,7 +263,7 @@
       .new-user-card { border-color:#2a422a; }
       .cs-cancel,.again-btn,.reg-cancel { background:#2a3a2a; color:var(--text); }
       .err-banner { background:#3d1010; border-color:#7a2020; color:#f08080; }
-      .reg-field input,.add-buddy-row input { border-color:#2a422a; }
+      .reg-field input,.add-buddy-row input,.contact-input { border-color:#2a422a; }
     }
   </style>
 </head>
@@ -312,6 +321,10 @@
       <div class="reg-field">
         <label>Golf PIN</label>
         <input id="reg-gpin" type="password" inputmode="numeric" maxlength="10" placeholder="Golf system PIN"/>
+      </div>
+      <div class="reg-field">
+        <label>Email for confirmations (optional)</label>
+        <input id="reg-email" type="email" placeholder="you@example.com"/>
       </div>
       <div class="reg-btns">
         <button class="reg-cancel" onclick="showUserSelect()">Cancel</button>
@@ -410,6 +423,17 @@
     <button class="again-btn" onclick="resetApp()">&#9971; Book Another Time</button>
   </div>
 
+  <div class="sec" id="sec-contact">
+    <div class="sec-hdr"><div class="sec-icon">&#128172;</div>
+      <div><div class="sec-title">Email Notifications</div><div class="sec-sub">Get booking confirmations by email</div></div>
+    </div>
+    <div class="contact-row">
+      <input id="emailAddr" type="email" placeholder="you@example.com" class="contact-input"/>
+      <button class="contact-save-btn" onclick="saveEmail()">Save</button>
+    </div>
+    <div class="contact-status" id="emailStatus"></div>
+  </div>
+
   <div class="switch-user" onclick="switchUser()">&#8592; Switch Golfer</div>
 
 </div>
@@ -433,7 +457,7 @@ function esc(s){ const d=document.createElement('div'); d.textContent=String(s);
 
 // ── State ──
 let BUDDIES = [];  // populated from server after user selection
-const S = { date:null,dateLabel:null,golfers:[],course:'Executive',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null };
+const S = { date:null,dateLabel:null,golfers:[],course:'Executive',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
 const CREDS_KEY = 'villagesGolfCredsV1';
 
 function getSavedCreds(){
@@ -467,6 +491,7 @@ function clearSavedCredsAndForm(){
   document.getElementById('reg-user').value='';
   document.getElementById('reg-pass').value='';
   document.getElementById('reg-gpin').value='';
+  document.getElementById('reg-email').value='';
 }
 
 // ── Init: restore session on page load ──
@@ -534,9 +559,11 @@ async function selectUser(username){
     const d=await r.json();
     if(d.ok){
       BUDDIES=d.buddies||[];
+      S.email=d.email||'';
       updateHeader(d.display_name, d.primary);
       buildGolfers();
       buildDates();
+      updateEmailUI();
       showScreen('app');
     }
   }catch(e){ alert('Error selecting user.'); }
@@ -559,6 +586,7 @@ function showRegister(){
   document.getElementById('reg-user').value=saved?.username||'';
   document.getElementById('reg-pass').value=saved?.password||'';
   document.getElementById('reg-gpin').value=saved?.golf_pin||'';
+  document.getElementById('reg-email').value='';
   document.getElementById('reg-err').textContent='';
   showScreen('reg-screen');
 }
@@ -569,6 +597,7 @@ async function registerUser(){
   const user=document.getElementById('reg-user').value.trim();
   const pass=document.getElementById('reg-pass').value;
   const gpin=document.getElementById('reg-gpin').value.trim();
+  const email=document.getElementById('reg-email').value.trim();
   const err=document.getElementById('reg-err');
   err.textContent='';
 
@@ -578,7 +607,7 @@ async function registerUser(){
   document.getElementById('reg-loader').style.display='block';
 
   try{
-    const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass,golf_pin:gpin})});
+    const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass,golf_pin:gpin,email})});
     const d=await r.json();
     document.getElementById('reg-loader').style.display='none';
     document.getElementById('reg-btn').disabled=false;
@@ -586,9 +615,11 @@ async function registerUser(){
     if(d.ok){
       saveCreds(user, pass, gpin);
       BUDDIES=d.buddies||[];
+      S.email=d.email||'';
       updateHeader(d.display_name, d.primary);
       buildGolfers();
       buildDates();
+      updateEmailUI();
       showScreen('app');
     } else {
       err.textContent=d.error||'Registration failed.';
@@ -757,7 +788,7 @@ function closeConfirm(){ document.getElementById('overlay').classList.remove('sh
 async function confirmBook(){
   const btn=document.getElementById('cs-book-btn'); btn.disabled=true; btn.textContent='Booking\u2026';
   try{
-    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
+    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
     const d=await r.json(); closeConfirm();
     if(!d.success){ showError(d.error||'Booking failed.'); return; }
     showSuccess(d);
@@ -771,6 +802,30 @@ function showSuccess(d){
   const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name||id)).join('<br>');
   document.getElementById('conf-card').innerHTML=`<div class="conf-row"><span>Reservation #</span><span>${esc(d.reservation_no)}</span></div><div class="conf-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="conf-row"><span>Time</span><span>${esc(d.display_time)}</span></div><div class="conf-row"><span>Course</span><span>${esc(d.course)}</span></div><div class="conf-row"><span>Golfers</span><span>${names}</span></div>`;
   sec.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ── Contact / email ──
+function updateEmailUI(){
+  const input=document.getElementById('emailAddr');
+  const status=document.getElementById('emailStatus');
+  input.value=S.email||'';
+  status.textContent=S.email?'Email confirmations enabled':'';
+}
+
+async function saveEmail(){
+  const email=document.getElementById('emailAddr').value.trim();
+  const status=document.getElementById('emailStatus');
+  try{
+    const r=await fetch('/api/update-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+    const d=await r.json();
+    if(d.ok){
+      S.email=d.email||'';
+      status.textContent=S.email?'Saved! Email confirmations enabled':'Email confirmations disabled';
+      status.style.color='var(--g2)';
+    } else {
+      status.textContent=d.error||'Save failed'; status.style.color='#c0392b';
+    }
+  }catch(e){ status.textContent='Connection error'; status.style.color='#c0392b'; }
 }
 
 function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth'});}else{b.textContent='';b.classList.remove('show');} }

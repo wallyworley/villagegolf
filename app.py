@@ -117,6 +117,10 @@ def _delete_user(username):
 _load_users()
 
 
+# ── Email notifications ──────────────────────────────────────────────────────
+from email_notifications import send_booking_confirmation
+
+
 # ── Golf Worker ───────────────────────────────────────────────────────────────
 class GolfWorker:
     """Single-threaded worker so Playwright objects stay on one thread."""
@@ -277,6 +281,69 @@ def _parse_booking_inputs(data, require_course_time=False):
     return parsed, None
 
 
+# ── Email notification helper ────────────────────────────────────────────────
+def _user_email(user_data):
+    """Return the preferred notification email for a user record."""
+    return (
+        user_data.get("email")
+        or user_data.get("imessage_address")
+        or ""
+    ).strip()
+
+
+def _send_booking_emails(date_label, golfer_ids, booking_result,
+                         course_name, request_id, booking_username=None):
+    """Send confirmation emails.
+
+    Sends to: (1) the user who made the booking, and (2) any other registered
+    user whose primary golfer ID is in the booking."""
+    res_no = booking_result.get("reservation_no", "—")
+    display_time = booking_result.get("display_time", "")
+
+    # Collect display names for all golfers in the booking
+    golfer_names = []
+    for gid in golfer_ids:
+        with _users_lock:
+            for u in _users.values():
+                for b in u.get("buddies", []):
+                    if b["id"] == str(gid):
+                        golfer_names.append(b["name"])
+                        break
+
+    with _users_lock:
+        users_snapshot = dict(_users)
+
+    golfer_id_strs = [str(g) for g in golfer_ids]
+    emails_sent = set()
+
+    def _notify(email):
+        """Send a booking confirmation to one email address."""
+        if email in emails_sent:
+            return
+        emails_sent.add(email)
+        send_booking_confirmation(
+            email, res_no, course_name, display_time,
+            date_label, golfer_names,
+        )
+
+    # Always notify the user who made the booking
+    if booking_username and booking_username in users_snapshot:
+        email = _user_email(users_snapshot[booking_username])
+        if email:
+            _notify(email)
+            app.logger.info("email.sent_booking_user request_id=%s user=%s", request_id, booking_username)
+
+    # Also notify any other registered user whose primary ID is in the booking
+    for uname, udata in users_snapshot.items():
+        email = _user_email(udata)
+        if not email:
+            continue
+        primary_id = (udata.get("primary") or {}).get("id")
+        if primary_id and str(primary_id) in golfer_id_strs:
+            _notify(email)
+            app.logger.info("email.sent_golfer request_id=%s user=%s", request_id, uname)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -297,6 +364,7 @@ def get_session():
             "display_name": user.get("display_name", username),
             "primary": user.get("primary"),
             "buddies": user.get("buddies", []),
+            "email": _user_email(user),
         })
     return jsonify({"auth": True, "username": None})
 
@@ -354,6 +422,7 @@ def select_user():
         "display_name": user.get("display_name", username),
         "primary": user.get("primary"),
         "buddies": user.get("buddies", []),
+        "email": _user_email(user),
     })
 
 
@@ -411,12 +480,15 @@ def register_user():
     # Use the TVN username as display name (not the first golfer in the dropdown)
     display_name = existing.get("display_name", tvn_username) if existing else tvn_username
 
+    email = (data.get("email") or "").strip()
+
     user_data = {
         "tvn_password": tvn_password,
         "golf_password": golf_password,
         "display_name": display_name,
         "primary": primary,
         "buddies": buddies,
+        "email": email or (_user_email(existing) if existing else ""),
     }
     _set_user(tvn_username, user_data)
     session["username"] = tvn_username
@@ -430,6 +502,7 @@ def register_user():
         "display_name": display_name,
         "primary": primary,
         "buddies": buddies,
+        "email": user_data.get("email", ""),
     })
 
 
@@ -500,6 +573,25 @@ def add_buddy():
     _set_user(username, user)
 
     return jsonify({"ok": True, "buddy": buddy, "buddies": user["buddies"]})
+
+
+@app.route("/api/update-email", methods=["POST"])
+def update_email():
+    """Update the notification email for the current user."""
+    err = require_auth()
+    if err:
+        return err
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"ok": False, "error": "No user selected."}), 400
+
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    user["email"] = email
+    _set_user(username, user)
+
+    return jsonify({"ok": True, "email": email})
 
 
 @app.route("/api/remove-user", methods=["POST"])
@@ -600,6 +692,9 @@ def book_tee_time():
         course_name,
         time_str,
     )
+    data_date_label = (data.get("date_label") or "").strip()
+    data_golfer_ids = data.get("golfer_ids") or []
+
     result = get_worker().call(
         "book_tee_time",
         request_id=request_id,
@@ -617,6 +712,21 @@ def book_tee_time():
         elapsed_ms,
         bool(result.get("success")),
     )
+
+    # Send confirmation emails on success
+    if result.get("success"):
+        app.logger.info(
+            "email.trigger request_id=%s golfer_ids=%s",
+            request_id, data_golfer_ids,
+        )
+        try:
+            _send_booking_emails(
+                data_date_label, data_golfer_ids, result,
+                course_name, request_id, booking_username=username,
+            )
+        except Exception as e:
+            app.logger.warning("email.notification_error request_id=%s error=%s", request_id, e)
+
     return jsonify(result)
 
 
