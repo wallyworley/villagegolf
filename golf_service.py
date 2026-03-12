@@ -189,35 +189,38 @@ class GolfService:
         self._golf_home_url = page.url
         self._session_ts = _time.time()
 
-    def _navigate_to_golf_home(self, page):
-        """Navigate back to glf100 from any golf page."""
-        url = page.url or ""
-        if "glf100" in url.lower():
-            return
-        if self._golf_home_url:
-            page.goto(self._golf_home_url, wait_until="networkidle", timeout=15000)
-            return
-        # Fallback: derive glf100 URL from current URL
-        import re as _re
-        m = _re.search(r'(https?://[^/]+/)', url)
-        if m:
-            page.goto(m.group(1) + "glf100", wait_until="networkidle", timeout=15000)
-            self._golf_home_url = page.url
-        else:
-            raise RuntimeError("Cannot navigate to golf home — session may be invalid")
-
     def _ensure_logged_in(self, page, tvn_username, tvn_password, golf_password):
-        """Avoid re-authentication if an active golf page is already open.
-        Always ensures we end up on glf100."""
         url = (page.url or "").lower()
-        if "thevillages.net" in url and "/glf" in url and "glf000" not in url:
-            self._navigate_to_golf_home(page)
+        
+        # If we are already exactly on the main menu, we can assume session is okay.
+        # If it timed out server-side, a subsequent click will fail, but usually it's fine.
+        if "glf100" in url or "glf105" in url:
             self._session_ts = _time.time()
             return
+            
+        # Try to click the native "Go Back to Menu" form button if we are on a subpage.
+        # This properly preserves the CGI backward state without needing a PIN re-login.
+        try:
+            btn = page.locator("input[name='Menu']")
+            if btn.count() > 0:
+                btn.first.click(timeout=5000)
+                page.wait_for_load_state("networkidle")
+                new_url = page.url.lower()
+                if "glf100" in new_url or "glf105" in new_url:
+                    self._session_ts = _time.time()
+                    return
+        except Exception:
+            pass
+
+        # If we are anywhere else (error page, stuck), attempting to navigate via GET
+        # breaks the CGI state. Safest and fastest robust way to get back
+        # to the main menu is to re-run the PIN login sequence from the TVN homepage.
         self._login(page, tvn_username, tvn_password, golf_password)
 
     def _nav_to_glf109c(self, page, num_golfers, has_guests, course_type):
         """Navigate from glf100 through glf109b to glf109c."""
+        print(f"DEBUG: URL is {page.url}")
+        print(f"DEBUG: CONTENT is {page.inner_text('body')}")
         # glf109a
         page.locator("a", has_text="Reservations-View Open Tee Times").click()
         page.wait_for_url("**/glf109a**", timeout=10000)
@@ -255,25 +258,37 @@ class GolfService:
         self._session_ts = _time.time()
 
     def _extract_times(self, page, time_filter=None):
-        rows = page.query_selector_all("table tr")
+        raw_times = page.evaluate("""() => {
+            const rows = document.querySelectorAll("table tr");
+            const results = [];
+            for (let i = 0; i < rows.length; i++) {
+                const cells = rows[i].querySelectorAll("td");
+                if (cells.length < 4) continue;
+                const linkElem = cells[0].querySelector("a");
+                if (!linkElem) continue;
+                
+                const courseText = cells[1].innerText || "";
+                const course = courseText.trim().split("\\n")[0];
+                const timeStr = (cells[2].innerText || "").trim();
+                const avail = (cells[3].innerText || "").trim();
+                
+                if (course && timeStr) {
+                    results.push({ course: course, time: timeStr, available: avail });
+                }
+            }
+            return results;
+        }""")
+
         times = []
-        for row in rows:
-            cells = row.query_selector_all("td")
-            if len(cells) < 4:
-                continue
-            course = cells[1].inner_text().strip().split("\n")[0]
-            time   = cells[2].inner_text().strip()
-            avail  = cells[3].inner_text().strip()
-            link   = cells[0].query_selector("a")
-            if not (course and time and link):
-                continue
-            if time_filter and not _matches_filter(time, time_filter):
+        for t in raw_times:
+            time_val = t["time"]
+            if time_filter and not _matches_filter(time_val, time_filter):
                 continue
             times.append({
-                "course":       course,
-                "time":         time,
-                "display_time": _display_time(time),
-                "available":    avail,
+                "course":       t["course"],
+                "time":         time_val,
+                "display_time": _display_time(time_val),
+                "available":    t["available"],
             })
         return times
 
@@ -294,10 +309,15 @@ class GolfService:
             buddies = []
             primary = None
             if golfer_select:
-                options = golfer_select.locator("option").all()
-                for opt in options:
-                    value = (opt.get_attribute("value") or "").strip()
-                    raw_text = opt.inner_text().strip()
+                raw_options = golfer_select.evaluate("""select => {
+                    return Array.from(select.options).map(opt => ({
+                        value: (opt.value || "").trim(),
+                        text: (opt.innerText || "").trim()
+                    }));
+                }""")
+                for opt in raw_options:
+                    value = opt["value"]
+                    raw_text = opt["text"]
                     # Skip placeholder options (empty value or non-numeric)
                     if not value or not value.isdigit():
                         continue
@@ -307,10 +327,6 @@ class GolfService:
                 # First real option is the primary golfer (the logged-in user)
                 if buddies:
                     primary = buddies[0]
-
-            # Navigate back to golf home so session is reusable for tee-time searches
-            if self._golf_home_url:
-                page.goto(self._golf_home_url, wait_until="networkidle", timeout=15000)
 
             return {"success": True, "primary": primary, "buddies": buddies}
 
@@ -343,12 +359,14 @@ class GolfService:
             self._session_ts = _time.time()  # refresh TTL
             return {"success": True, "times": times, "date_label": date_label}
         except PWTimeout as e:
+            import traceback; traceback.print_exc()
             self._close_session()
             return {"success": False, "error": f"Page timed out: {e}"}
         except RuntimeError as e:
             self._close_session()
             return {"success": False, "error": str(e)}
         except Exception as e:
+            import traceback; traceback.print_exc()
             self._close_session()
             return {"success": False, "error": f"Unexpected error: {e}"}
 
