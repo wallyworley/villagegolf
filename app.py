@@ -262,9 +262,14 @@ def _parse_booking_inputs(data, require_course_time=False):
     if num_golfers != len(golfer_ids):
         return None, "Number of golfers must match selected golfers."
 
+    region_filter = (data.get("region_filter") or "all").strip().lower()
+    if region_filter not in {"all", "north", "central", "south"}:
+        return None, "Region must be north, central, south, or all."
+
     parsed = {
         "date_str": date_str,
         "course_type": course_type,
+        "region_filter": region_filter,
         "golfer_ids": golfer_ids,
         "num_golfers": num_golfers,
         "has_guests": bool(data.get("has_guests", False)),
@@ -289,6 +294,14 @@ def _user_email(user_data):
         or user_data.get("imessage_address")
         or ""
     ).strip()
+
+
+def _account_initials(username, user_data):
+    """Return initials for the saved account identity, not the buddy-list primary."""
+    from golf_service import _initials
+
+    display_name = (user_data.get("display_name") or username or "").strip()
+    return _initials(display_name) if display_name else "?"
 
 
 def _send_booking_emails(date_label, golfer_ids, booking_result,
@@ -400,7 +413,7 @@ def list_users():
                 "username": username,
                 "display_name": u.get("display_name", username),
                 "primary": u.get("primary"),
-                "initials": u.get("primary", {}).get("initials", "?"),
+                "initials": _account_initials(username, u),
             })
     return jsonify({"users": users_safe})
 
@@ -648,6 +661,7 @@ def get_tee_times():
         date_str     = parsed["date_str"],
         date_label   = data.get("date_label", ""),
         course_type  = parsed["course_type"],
+        region_filter = parsed["region_filter"],
         golfer_ids   = parsed["golfer_ids"],
         num_golfers  = parsed["num_golfers"],
         has_guests   = parsed["has_guests"],

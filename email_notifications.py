@@ -70,6 +70,7 @@ def send_email(recipient_email, subject, text_body, html_body=None):
             "Authorization": f"Bearer {cfg['token']}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "VillagesGolfApp/1.0",
         },
         method="POST",
     )

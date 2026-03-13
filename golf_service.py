@@ -8,6 +8,7 @@ import os
 import re
 import time as _time
 
+from course_metadata import lookup_course_metadata
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 # Set HEADLESS=false in .env to watch the browser during local testing
@@ -75,6 +76,46 @@ def _display_time(t):
     return f"{real_h - 12}:{m:02d} PM"
 
 
+def _normalize_course_label(raw_text):
+    """Build a compact course label from the tee-time table cell."""
+    lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    text = " - ".join(line for line in lines if not line.isdigit())
+    if not text:
+        text = " - ".join(lines)
+
+    # Drop extra stats; the UI only needs the course and starting hole.
+    text = re.split(r"\s*-\s*(?:Level|Yardage)\s*:", text, maxsplit=1, flags=re.IGNORECASE)[0]
+
+    # Remove numeric course ids like "(48)" and normalize hole formatting.
+    text = re.sub(r"\s*\(\d+\)", "", text)
+    text = re.sub(
+        r"[/\-]\s*hole\s*\(?\s*(\d+)\s*\)?",
+        lambda m: f", hole {m.group(1)}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bhole\s*\(?\s*(\d+)\s*\)?",
+        lambda m: f"hole {m.group(1)}",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Championship labels sometimes end with incomplete fragments like
+    # "/hole" or "- hole" with no number. Keep the nine name and drop the
+    # dangling suffix.
+    text = re.sub(r"[/\-]\s*hole\b\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r",\s*$", "", text)
+
+    # Clean up separator spacing introduced by the source HTML.
+    text = re.sub(r"\s*-\s*", " - ", text)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    return text.strip(" -")
+
+
 def _clean_golfer_name(raw_name, golfer_id=None):
     """Strip trailing golfer ID from a Villages display name.
     e.g. 'Marcia Ann Worley 640405' → 'Marcia Ann Worley'"""
@@ -116,6 +157,7 @@ class GolfService:
     def __init__(self):
         self._pw          = None
         self._browser     = None
+        self._context     = None
         self._page        = None
         self._session_ts  = 0
         self._current_user = None  # tvn_username of cached session
@@ -124,6 +166,11 @@ class GolfService:
 
     def _close_session(self):
         """Close any cached browser session."""
+        try:
+            if self._context:
+                self._context.close()
+        except Exception:
+            pass
         try:
             if self._browser:
                 self._browser.close()
@@ -134,21 +181,34 @@ class GolfService:
                 self._pw.stop()
         except Exception:
             pass
-        self._pw = self._browser = self._page = None
+        self._pw = self._browser = self._context = self._page = None
         self._session_ts = 0
         self._current_user = None
         self._search_context = None
 
+    def _session_is_usable(self):
+        """Return True if the cached Playwright objects still look valid."""
+        if not self._browser or not self._page:
+            return False
+        try:
+            if hasattr(self._browser, "is_connected") and not self._browser.is_connected():
+                return False
+            if hasattr(self._page, "is_closed") and self._page.is_closed():
+                return False
+        except Exception:
+            return False
+        return True
+
     def _get_or_create_session(self, tvn_username):
         """Return a (browser, page) reusing the cached session if still valid
         and belongs to the same user."""
-        if (self._page and self._browser
+        if (self._session_is_usable()
                 and self._current_user == tvn_username):
             return self._browser, self._page
         # Stale, missing, or different user — start fresh
         self._close_session()
         self._pw = sync_playwright().start()
-        self._browser, self._page = self._launch(self._pw)
+        self._browser, self._context, self._page = self._launch(self._pw)
         self._session_ts = _time.time()
         self._current_user = tvn_username
         return self._browser, self._page
@@ -167,7 +227,7 @@ class GolfService:
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
         )
-        return browser, ctx.new_page()
+        return browser, ctx, ctx.new_page()
 
     def _login(self, page, tvn_username, tvn_password, golf_password):
         # Step 1: TVN login
@@ -257,7 +317,7 @@ class GolfService:
         page.wait_for_url("**/glf109e**", timeout=15000)
         self._session_ts = _time.time()
 
-    def _extract_times(self, page, time_filter=None):
+    def _extract_times(self, page, time_filter=None, region_filter=None):
         raw_times = page.evaluate("""() => {
             const rows = document.querySelectorAll("table tr");
             const results = [];
@@ -268,12 +328,11 @@ class GolfService:
                 if (!linkElem) continue;
                 
                 const courseText = cells[1].innerText || "";
-                const course = courseText.trim().split("\\n")[0];
                 const timeStr = (cells[2].innerText || "").trim();
                 const avail = (cells[3].innerText || "").trim();
                 
-                if (course && timeStr) {
-                    results.push({ course: course, time: timeStr, available: avail });
+                if (courseText && timeStr) {
+                    results.push({ course: courseText, time: timeStr, available: avail });
                 }
             }
             return results;
@@ -284,8 +343,19 @@ class GolfService:
             time_val = t["time"]
             if time_filter and not _matches_filter(time_val, time_filter):
                 continue
+            course_label = _normalize_course_label(t["course"])
+            canonical_name, metadata = lookup_course_metadata(course_label)
+            if region_filter and region_filter != "all":
+                region = (metadata.get("region") or "").strip().lower()
+                if region != region_filter:
+                    continue
             times.append({
-                "course":       t["course"],
+                "course":       course_label,
+                "course_name":  canonical_name or course_label,
+                "region":       metadata.get("region"),
+                "course_type":  metadata.get("course_type"),
+                "address":      metadata.get("address"),
+                "zip":          metadata.get("zip"),
                 "time":         time_val,
                 "display_time": _display_time(time_val),
                 "available":    t["available"],
@@ -341,17 +411,18 @@ class GolfService:
             return {"success": False, "error": f"Unexpected error: {e}"}
 
     def get_available_times(self, tvn_username, tvn_password, golf_password,
-                            date_str, date_label, course_type,
+                            date_str, date_label, course_type, region_filter,
                             golfer_ids, num_golfers, has_guests, time_filter=None):
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._setup_reservation(page, num_golfers, has_guests, course_type, golfer_ids, date_str)
-            times = self._extract_times(page, time_filter)
+            times = self._extract_times(page, time_filter, region_filter)
             self._search_context = {
                 "user": tvn_username,
                 "date_str": str(date_str or "").strip(),
                 "course_type": str(course_type or "").strip(),
+                "region_filter": str(region_filter or "all").strip().lower(),
                 "golfer_ids": [str(g).strip() for g in (golfer_ids or []) if str(g).strip()],
                 "num_golfers": int(num_golfers),
                 "has_guests": bool(has_guests),
@@ -393,9 +464,9 @@ class GolfService:
                 cells = row.query_selector_all("td")
                 if len(cells) < 3:
                     continue
-                course = cells[1].inner_text().strip().split("\n")[0]
+                course = _normalize_course_label(cells[1].inner_text())
                 time   = cells[2].inner_text().strip()
-                if course_name in course and time == time_str:
+                if course_name == course and time == time_str:
                     link = cells[0].query_selector("a")
                     if link:
                         link.click()

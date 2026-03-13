@@ -143,6 +143,7 @@
                      padding:9px 14px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
 
     .two { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .four { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; }
     .tile { border:2px solid #e4eae4; border-radius:13px; padding:15px 9px;
             text-align:center; cursor:pointer; transition:all .18s; user-select:none; }
     .tile:active { transform:scale(.97); }
@@ -212,11 +213,11 @@
     .cs-sub { font-size:13px; color:var(--muted); margin-bottom:20px; }
     .cs-detail { background:var(--gl); border:1px solid var(--gb); border-radius:12px;
                  padding:14px 16px; margin-bottom:20px; }
-    .cs-row { display:flex; justify-content:space-between; font-size:14px;
-              padding:3px 0; border-bottom:1px solid rgba(45,138,71,.12); }
+    .cs-row { display:grid; grid-template-columns:78px 1fr; gap:12px; align-items:start;
+              font-size:14px; padding:7px 0; border-bottom:1px solid rgba(45,138,71,.12); }
     .cs-row:last-child { border:none; }
     .cs-row span:first-child { color:var(--muted); }
-    .cs-row span:last-child { font-weight:700; }
+    .cs-row span:last-child { font-weight:700; text-align:right; line-height:1.25; }
     .cs-btns { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .cs-cancel { background:#eee; color:var(--text); border:none; border-radius:12px;
                  padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
@@ -369,11 +370,26 @@
       <div><div class="sec-title">Course &amp; Guests</div><div class="sec-sub">Course type and guest info</div></div>
     </div>
     <div class="two" style="margin-bottom:14px;">
-      <div class="tile on" id="t-exec" onclick="setCourse('Executive')">
+      <div class="tile" id="t-exec" onclick="setCourse('Executive')">
         <div class="tile-ico">&#128994;</div><div class="tile-lbl">Executive</div><div class="tile-sub">Shorter course</div>
       </div>
       <div class="tile" id="t-champ" onclick="setCourse('Championship')">
         <div class="tile-ico">&#127942;</div><div class="tile-lbl">Championship</div><div class="tile-sub">Full 18 holes</div>
+      </div>
+    </div>
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Region</div>
+    <div class="four" style="margin-bottom:14px;">
+      <div class="tile on" id="r-all" onclick="setRegion('all')">
+        <div class="tile-lbl">All</div><div class="tile-sub">Any area</div>
+      </div>
+      <div class="tile" id="r-north" onclick="setRegion('north')">
+        <div class="tile-lbl">North</div><div class="tile-sub">North side</div>
+      </div>
+      <div class="tile" id="r-central" onclick="setRegion('central')">
+        <div class="tile-lbl">Central</div><div class="tile-sub">Middle area</div>
+      </div>
+      <div class="tile" id="r-south" onclick="setRegion('south')">
+        <div class="tile-lbl">South</div><div class="tile-sub">South side</div>
       </div>
     </div>
     <div class="tog-row">
@@ -387,11 +403,11 @@
       <div><div class="sec-title">Time Preference</div><div class="sec-sub">When would you like to tee off?</div></div>
     </div>
     <div class="time-grid five">
-      <div class="t-tile" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">Show all</div></div>
-      <div class="t-tile" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
-      <div class="t-tile" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
-      <div class="t-tile" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon &#8211; 2pm</div></div>
-      <div class="t-tile" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
+      <div class="t-tile" data-filter="all" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">Show all</div></div>
+      <div class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
+      <div class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
+      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon &#8211; 2pm</div></div>
+      <div class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
     </div>
   </div>
 
@@ -424,7 +440,7 @@
   </div>
 
   <div class="sec" id="sec-contact">
-    <div class="sec-hdr"><div class="sec-icon">&#128172;</div>
+    <div class="sec-hdr"><div class="sec-icon">&#128231;</div>
       <div><div class="sec-title">Email Notifications</div><div class="sec-sub">Get booking confirmations by email</div></div>
     </div>
     <div class="contact-row">
@@ -457,7 +473,7 @@ function esc(s){ const d=document.createElement('div'); d.textContent=String(s);
 
 // ── State ──
 let BUDDIES = [];  // populated from server after user selection
-const S = { date:null,dateLabel:null,golfers:[],course:'Executive',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
+const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
 const CREDS_KEY = 'villagesGolfCredsV1';
 
 function getSavedCreds(){
@@ -689,6 +705,7 @@ function buildDates(){
     const isoDate=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const label=`${FULL[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
     const c=document.createElement('div'); c.className='d-card';
+    c.dataset.offset=String(i);
     c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div><div class="d-wx" id="wx-${isoDate}"></div>`;
     c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; unlock('sec-golfers'); checkFetch(); };
     grid.appendChild(c);
@@ -722,6 +739,11 @@ function buildGolfers(){
   });
 }
 
+function selectDateOffset(offset){
+  const card=[...document.querySelectorAll('.d-card')].find(x=>x.dataset.offset===String(offset));
+  if(card) card.click();
+}
+
 // ── Add buddy by ID ──
 async function addBuddy(){
   const idInput=document.getElementById('buddy-id-input');
@@ -741,9 +763,13 @@ async function addBuddy(){
 }
 
 function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); unlock('sec-time'); checkFetch(); }
+function setRegion(region){
+  S.regionFilter=region;
+  ['all','north','central','south'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r===region));
+}
 function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>x.classList.remove('on')); el.classList.add('on'); unlock('sec-fetch'); checkFetch(); }
 function unlock(id){ document.getElementById(id).classList.remove('dim'); }
-function checkFetch(){ const ok=S.date&&S.golfers.length>0&&S.timeFilter; document.getElementById('fetchBtn').disabled=!ok; if(ok) unlock('sec-fetch'); }
+function checkFetch(){ const ok=S.date&&S.golfers.length>0&&S.course&&S.timeFilter; document.getElementById('fetchBtn').disabled=!ok; if(ok) unlock('sec-fetch'); }
 
 async function fetchTimes(){
   showError('');
@@ -754,7 +780,7 @@ async function fetchTimes(){
   const msgs=['Logging in to The Villages\u2026','Navigating to golf system\u2026','Fetching available tee times\u2026','Almost there\u2026'];
   let mi=0; const iv=setInterval(()=>{ if(mi<msgs.length-1) ltxt.textContent=msgs[++mi]; },3500);
   try{
-    const r=await fetch('/api/tee-times',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,time_filter:S.timeFilter})});
+    const r=await fetch('/api/tee-times',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,region_filter:S.regionFilter,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,time_filter:S.timeFilter})});
     const d=await r.json();
     clearInterval(iv); loader.style.display='none';
     if(!d.success){ showError(d.error||'Failed to fetch tee times.'); return; }
@@ -831,9 +857,11 @@ async function saveEmail(){
 function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth'});}else{b.textContent='';b.classList.remove('show');} }
 
 function resetApp(){
-  S.date=null;S.dateLabel=null;S.golfers=[];S.course='Executive';S.guests=false;S.timeFilter=null;
+  S.date=null;S.dateLabel=null;S.golfers=[];S.course=null;S.regionFilter='all';S.guests=false;S.timeFilter=null;
   document.querySelectorAll('.d-card,.g-card,.t-tile').forEach(x=>x.classList.remove('on'));
-  document.getElementById('t-exec').classList.add('on');
+  document.getElementById('t-exec').classList.remove('on');
+  document.getElementById('t-champ').classList.remove('on');
+  ['all','north','central','south'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r==='all'));
   document.getElementById('guestTog').checked=false;
   ['sec-golfers','sec-course','sec-time','sec-fetch'].forEach(id=>document.getElementById(id).classList.add('dim'));
   document.getElementById('results-sec').style.display='none';
