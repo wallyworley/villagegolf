@@ -5,8 +5,13 @@ Transactional email helpers backed by the MailerSend Email API.
 import json
 import logging
 import os
+import ssl
 import urllib.error
 import urllib.request
+
+import certifi
+
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +81,7 @@ def send_email(recipient_email, subject, text_body, html_body=None):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
             message_id = resp.headers.get("x-message-id", "")
             log.info(
                 "email.sent recipient=%s status=%s message_id=%s",

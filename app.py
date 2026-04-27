@@ -4,7 +4,6 @@ Serves the frontend and provides API endpoints for
 fetching tee times and booking via The Villages system.
 """
 
-import json
 import logging
 import os
 import queue
@@ -14,7 +13,6 @@ import uuid
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
-
 load_dotenv()  # loads .env when running locally; no-op in Cloud Run
 
 logging.basicConfig(
@@ -26,8 +24,6 @@ app = Flask(__name__, template_folder="templates")
 app.logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
-APP_PIN = os.environ.get("APP_PIN", "1234")
-
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
     logging.warning("SECRET_KEY not set — sessions will not survive restarts")
@@ -39,82 +35,95 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
 )
 
-# ── PIN rate limiting ─────────────────────────────────────────────────────────
-_pin_attempts = {}  # ip -> {"count": int, "locked_until": float}
-_pin_lock = threading.Lock()
-_MAX_PIN_ATTEMPTS = 5
+# ── Login rate limiting ───────────────────────────────────────────────────────
+_login_attempts = {}  # ip:user -> {"count": int, "locked_until": float}
+_login_lock = threading.Lock()
+_MAX_LOGIN_ATTEMPTS = 5
 _LOCKOUT_SECONDS = 300  # 5 minutes
 
+_WORKER_PUBLIC_ERRORS = {
+    "register": "Could not connect to the golf system. Please try again.",
+    "refresh_buddies": "Could not refresh your golfers right now. Please try again.",
+    "tee_times": "Could not fetch tee times right now. Please try again.",
+    "my_tee_times": "Could not load your tee times right now. Please try again.",
+    "delete_reservation": "Could not delete that reservation right now. Please try again.",
+    "book": "Booking failed. Please try again.",
+}
 
-def _check_pin_rate(ip):
+
+def _check_login_rate(key):
     """Return error string if IP is locked out, else None."""
-    with _pin_lock:
-        rec = _pin_attempts.get(ip)
+    with _login_lock:
+        rec = _login_attempts.get(key)
         if not rec:
             return None
         if rec["locked_until"] and time.time() < rec["locked_until"]:
             remaining = int(rec["locked_until"] - time.time())
             return f"Too many attempts. Try again in {remaining}s."
         if rec["locked_until"] and time.time() >= rec["locked_until"]:
-            del _pin_attempts[ip]
+            del _login_attempts[key]
         return None
 
 
-def _record_pin_failure(ip):
-    with _pin_lock:
-        rec = _pin_attempts.setdefault(ip, {"count": 0, "locked_until": None})
+def _record_login_failure(key):
+    with _login_lock:
+        rec = _login_attempts.setdefault(key, {"count": 0, "locked_until": None})
         rec["count"] += 1
-        if rec["count"] >= _MAX_PIN_ATTEMPTS:
+        if rec["count"] >= _MAX_LOGIN_ATTEMPTS:
             rec["locked_until"] = time.time() + _LOCKOUT_SECONDS
 
 
-def _clear_pin_attempts(ip):
-    with _pin_lock:
-        _pin_attempts.pop(ip, None)
+def _clear_login_attempts(key):
+    with _login_lock:
+        _login_attempts.pop(key, None)
 
 
-# ── User store ────────────────────────────────────────────────────────────────
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
-_users = {}
-_users_lock = threading.Lock()
+def _worker_public_error(action):
+    return _WORKER_PUBLIC_ERRORS.get(
+        action,
+        "Could not complete that request right now. Please try again.",
+    )
 
 
-def _load_users():
-    global _users
-    with _users_lock:
-        if os.path.exists(USERS_FILE):
-            try:
-                with open(USERS_FILE, "r") as f:
-                    _users = json.load(f)
-            except Exception:
-                _users = {}
-        return dict(_users)
+# ── User store (Firestore) ────────────────────────────────────────────────────
+from google.cloud import firestore
+
+_USERS_COLLECTION = os.environ.get("FIRESTORE_USERS_COLLECTION", "users")
+_FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)")
+_db = None
+_db_lock = threading.Lock()
 
 
-def _save_users():
-    with _users_lock:
-        with open(USERS_FILE, "w") as f:
-            json.dump(_users, f, indent=2)
+def _get_db():
+    global _db
+    with _db_lock:
+        if _db is None:
+            _db = firestore.Client(database=_FIRESTORE_DATABASE)
+    return _db
+
+
+def _users_col():
+    return _get_db().collection(_USERS_COLLECTION)
 
 
 def _get_user(username):
-    with _users_lock:
-        return _users.get(username)
+    if not username:
+        return None
+    doc = _users_col().document(username).get()
+    return doc.to_dict() if doc.exists else None
 
 
 def _set_user(username, data):
-    with _users_lock:
-        _users[username] = data
-    _save_users()
+    _users_col().document(username).set(data)
 
 
 def _delete_user(username):
-    with _users_lock:
-        _users.pop(username, None)
-    _save_users()
+    _users_col().document(username).delete()
 
 
-_load_users()
+def _all_users():
+    """Return {username: data} for every registered profile."""
+    return {doc.id: (doc.to_dict() or {}) for doc in _users_col().stream()}
 
 
 # ── Email notifications ──────────────────────────────────────────────────────
@@ -192,7 +201,7 @@ class GolfWorker:
                 elapsed_ms,
                 exc_info=done["error"],
             )
-            return {"success": False, "error": f"Worker error: {done['error']}"}
+            return {"success": False, "error": _worker_public_error(action)}
         elapsed_ms = int((time.monotonic() - started) * 1000)
         app.logger.info(
             "worker.done request_id=%s action=%s duration_ms=%s success=%s",
@@ -234,6 +243,16 @@ def _get_session_user():
     if not username:
         return None
     return _get_user(username)
+
+
+def _login_key(ip, username=""):
+    return f"{ip}:{(username or '').strip().lower()}"
+
+
+def _set_authenticated_user(username):
+    session["auth"] = True
+    session["username"] = username
+    session.permanent = True
 
 
 def _parse_booking_inputs(data, require_course_time=False):
@@ -296,14 +315,6 @@ def _user_email(user_data):
     ).strip()
 
 
-def _account_initials(username, user_data):
-    """Return initials for the saved account identity, not the buddy-list primary."""
-    from golf_service import _initials
-
-    display_name = (user_data.get("display_name") or username or "").strip()
-    return _initials(display_name) if display_name else "?"
-
-
 def _send_booking_emails(date_label, golfer_ids, booking_result,
                          course_name, request_id, booking_username=None):
     """Send confirmation emails.
@@ -313,18 +324,19 @@ def _send_booking_emails(date_label, golfer_ids, booking_result,
     res_no = booking_result.get("reservation_no", "—")
     display_time = booking_result.get("display_time", "")
 
+    users_snapshot = _all_users()
+
     # Collect display names for all golfers in the booking
     golfer_names = []
     for gid in golfer_ids:
-        with _users_lock:
-            for u in _users.values():
-                for b in u.get("buddies", []):
-                    if b["id"] == str(gid):
-                        golfer_names.append(b["name"])
-                        break
-
-    with _users_lock:
-        users_snapshot = dict(_users)
+        for u in users_snapshot.values():
+            matched = next(
+                (b["name"] for b in u.get("buddies", []) if b["id"] == str(gid)),
+                None,
+            )
+            if matched:
+                golfer_names.append(matched)
+                break
 
     golfer_id_strs = [str(g) for g in golfer_ids]
     emails_sent = set()
@@ -382,79 +394,46 @@ def get_session():
     return jsonify({"auth": True, "username": None})
 
 
-@app.route("/api/verify-pin", methods=["POST"])
-def verify_pin():
-    """Check the app PIN and set a session cookie."""
+@app.route("/api/login-user", methods=["POST"])
+def login_user():
+    """Authenticate by TVN username + password + golf PIN, then set a session cookie."""
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    golf_pin = (data.get("golf_pin") or "").strip()
+
     ip = request.remote_addr or "unknown"
-    lockout = _check_pin_rate(ip)
+    rate_key = _login_key(ip, username)
+    lockout = _check_login_rate(rate_key)
     if lockout:
         return jsonify({"ok": False, "error": lockout}), 429
 
-    data = request.get_json() or {}
-    if str(data.get("pin", "")).strip() == str(APP_PIN).strip():
-        session["auth"] = True
-        _clear_pin_attempts(ip)
-        return jsonify({"ok": True})
+    user = _get_user(username) if username else None
+    credentials_ok = (
+        user is not None
+        and password
+        and golf_pin
+        and user.get("tvn_password") == password
+        and user.get("golf_password") == golf_pin
+    )
+    if credentials_ok:
+        _set_authenticated_user(username)
+        _clear_login_attempts(rate_key)
+        return jsonify({
+            "ok": True,
+            "display_name": user.get("display_name", username),
+            "primary": user.get("primary"),
+            "buddies": user.get("buddies", []),
+            "email": _user_email(user),
+        })
 
-    _record_pin_failure(ip)
-    return jsonify({"ok": False, "error": "Incorrect PIN"}), 401
-
-
-@app.route("/api/users", methods=["GET"])
-def list_users():
-    """Return list of cached user profiles (no passwords)."""
-    err = require_auth()
-    if err:
-        return err
-    users_safe = []
-    with _users_lock:
-        for username, u in _users.items():
-            users_safe.append({
-                "username": username,
-                "display_name": u.get("display_name", username),
-                "primary": u.get("primary"),
-                "initials": _account_initials(username, u),
-            })
-    return jsonify({"users": users_safe})
-
-
-@app.route("/api/select-user", methods=["POST"])
-def select_user():
-    """Select a cached user profile for this session."""
-    err = require_auth()
-    if err:
-        return err
-    data = request.get_json() or {}
-    username = (data.get("username") or "").strip()
-    user = _get_user(username)
-    if not user:
-        return jsonify({"ok": False, "error": "User not found"}), 404
-    session["username"] = username
-    return jsonify({
-        "ok": True,
-        "display_name": user.get("display_name", username),
-        "primary": user.get("primary"),
-        "buddies": user.get("buddies", []),
-        "email": _user_email(user),
-    })
-
-
-@app.route("/api/clear-user", methods=["POST"])
-def clear_user():
-    """Clear selected user from the current authenticated session."""
-    err = require_auth()
-    if err:
-        return err
-    session.pop("username", None)
-    return jsonify({"ok": True})
+    _record_login_failure(rate_key)
+    return jsonify({"ok": False, "error": "Incorrect username, password, or PIN"}), 401
 
 
 @app.route("/api/register", methods=["POST"])
 def register_user():
     """Register a new user: login to Villages, fetch buddy list, cache profile."""
-    err = require_auth()
-    if err:
-        return err
     request_id = _request_id()
     data = request.get_json() or {}
     tvn_username = (data.get("username") or "").strip()
@@ -504,7 +483,7 @@ def register_user():
         "email": email or (_user_email(existing) if existing else ""),
     }
     _set_user(tvn_username, user_data)
-    session["username"] = tvn_username
+    _set_authenticated_user(tvn_username)
 
     app.logger.info(
         "api.done request_id=%s action=register success=True user=%s buddies=%d",
@@ -674,6 +653,86 @@ def get_tee_times():
         elapsed_ms,
         bool(result.get("success")),
         len(result.get("times", [])) if isinstance(result.get("times"), list) else 0,
+    )
+    return jsonify(result)
+
+
+@app.route("/api/my-tee-times", methods=["GET"])
+def my_tee_times():
+    """Fetch the current user's outstanding tee times/reservations."""
+    request_id = _request_id()
+    started = time.monotonic()
+    err = require_auth()
+    if err:
+        app.logger.info("api.denied request_id=%s action=my_tee_times reason=not_authenticated", request_id)
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    app.logger.info("api.start request_id=%s action=my_tee_times user=%s", request_id, username)
+    result = get_worker().call(
+        "view_my_tee_times",
+        request_id=request_id,
+        action="my_tee_times",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+    )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    app.logger.info(
+        "api.done request_id=%s action=my_tee_times duration_ms=%s success=%s count=%s",
+        request_id,
+        elapsed_ms,
+        bool(result.get("success")),
+        len(result.get("reservations", [])) if isinstance(result.get("reservations"), list) else 0,
+    )
+    return jsonify(result)
+
+
+@app.route("/api/delete-reservation", methods=["POST"])
+def delete_reservation():
+    """Delete all players on the specified reservation."""
+    request_id = _request_id()
+    started = time.monotonic()
+    err = require_auth()
+    if err:
+        app.logger.info("api.denied request_id=%s action=delete_reservation reason=not_authenticated", request_id)
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    data = request.get_json() or {}
+    reservation_no = (data.get("reservation_no") or "").strip()
+    if not reservation_no:
+        return jsonify({"success": False, "error": "Reservation number is required."}), 400
+
+    app.logger.info(
+        "api.start request_id=%s action=delete_reservation user=%s reservation_no=%s",
+        request_id,
+        username,
+        reservation_no,
+    )
+    result = get_worker().call(
+        "delete_reservation",
+        request_id=request_id,
+        action="delete_reservation",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+        reservation_no=reservation_no,
+    )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    app.logger.info(
+        "api.done request_id=%s action=delete_reservation duration_ms=%s success=%s",
+        request_id,
+        elapsed_ms,
+        bool(result.get("success")),
     )
     return jsonify(result)
 
