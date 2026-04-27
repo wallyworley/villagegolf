@@ -27,12 +27,13 @@
                   background:rgba(255,255,255,.15); border-radius:20px;
                   padding:5px 13px; margin-top:10px; font-size:13px; font-weight:600; }
 
-    #pin-screen { display:flex; flex-direction:column; align-items:center;
+    #login-screen { display:none; flex-direction:column; align-items:center;
                   justify-content:center; min-height:60vh; padding:24px; }
     .pin-card { background:var(--card); border-radius:var(--r); padding:28px 24px;
                 width:100%; max-width:340px; box-shadow:var(--shadow); text-align:center; }
     .pin-card h2 { font-size:18px; font-weight:700; margin-bottom:6px; }
     .pin-card p  { font-size:13px; color:var(--muted); margin-bottom:20px; }
+    .pin-meta { font-size:12px; color:var(--muted); margin:-10px 0 16px; }
     .pin-input { width:100%; border:2px solid #dde8dd; border-radius:12px;
                  padding:14px; font-size:22px; letter-spacing:8px; text-align:center;
                  font-weight:700; outline:none; transition:.2s; background:var(--card); color:var(--text); }
@@ -56,26 +57,17 @@
     .u-name { font-weight:700; font-size:14px; }
     .u-sub  { font-size:11px; color:var(--muted); margin-top:1px; }
     .u-arrow { margin-left:auto; color:var(--muted); font-size:18px; }
-    .u-remove { margin-left:6px; color:#c0392b; font-size:13px; cursor:pointer;
-                opacity:.5; padding:4px 8px; border-radius:8px; }
-    .u-remove:hover { opacity:1; background:rgba(192,57,43,.1); }
 
     .new-user-card { border:2px dashed #c8d8c8; border-radius:13px; padding:16px;
                      cursor:pointer; text-align:center; color:var(--g3); font-weight:700;
                      font-size:14px; transition:all .18s; }
     .new-user-card:hover { border-color:var(--g3); background:var(--gl); }
-    .user-clear { margin-top:10px; text-align:center; font-size:12px; font-weight:700;
-                  color:var(--g3); cursor:pointer; }
-    .user-clear:hover { opacity:.85; }
-
     /* ── Registration form ── */
     #reg-screen { display:none; }
     .reg-card { background:var(--card); border-radius:var(--r); padding:24px 20px;
                 max-width:400px; margin:0 auto; box-shadow:var(--shadow); }
     .reg-card h2 { font-size:17px; font-weight:700; margin-bottom:4px; }
     .reg-card .reg-sub { font-size:12px; color:var(--muted); margin-bottom:10px; }
-    .reg-clear { color:var(--g3); font-size:12px; font-weight:700; cursor:pointer; margin-bottom:12px; }
-    .reg-clear:hover { opacity:.85; }
     .reg-field { margin-bottom:13px; }
     .reg-field label { display:block; font-size:12px; font-weight:700; color:var(--muted);
                        text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
@@ -98,6 +90,12 @@
     .sec { background:var(--card); border-radius:var(--r); padding:18px 18px 20px;
            margin-bottom:13px; box-shadow:var(--shadow); transition:opacity .3s; }
     .sec.dim { opacity:.38; pointer-events:none; }
+    .app-nav { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:13px; }
+    .app-tab { border:none; border-radius:14px; padding:13px 12px; font-size:14px; font-weight:800;
+               background:#e7efe7; color:var(--muted); cursor:pointer; transition:.18s; }
+    .app-tab.active { background:linear-gradient(135deg,var(--g1),var(--g3)); color:#fff; box-shadow:0 4px 14px rgba(26,92,42,.2); }
+    .app-view { display:none; }
+    .app-view.active { display:block; }
     .sec-hdr { display:flex; align-items:center; gap:9px; margin-bottom:15px; }
     .sec-icon { width:32px; height:32px; border-radius:10px; background:var(--gl);
                 display:flex; align-items:center; justify-content:center; font-size:15px; }
@@ -200,7 +198,7 @@
     .time-row:hover { border-color:var(--g3); background:var(--gl); }
     .tr-time { font-size:18px; font-weight:800; }
     .tr-course { font-size:12px; color:var(--muted); margin-top:2px; }
-    .tr-avail { font-size:12px; background:var(--gl); color:var(--g2);
+    .tr-avail { font-size:12px; background:var(--gl); color:var(--text);
                 border-radius:8px; padding:3px 9px; font-weight:700; white-space:nowrap; }
     .no-times { text-align:center; color:var(--muted); font-size:14px; padding:16px 0; }
 
@@ -225,6 +223,10 @@
                border:none; border-radius:12px; padding:14px; font-size:15px;
                font-weight:700; cursor:pointer; }
     .cs-book:disabled { opacity:.5; cursor:not-allowed; }
+    .cs-delete { background:linear-gradient(135deg,#9f1d1d,#cf3a2b); color:#fff;
+                 border:none; border-radius:12px; padding:14px; font-size:15px;
+                 font-weight:700; cursor:pointer; }
+    .cs-delete:disabled { opacity:.5; cursor:not-allowed; }
 
     #success-sec { display:none; text-align:center; padding:20px 0 10px; }
     .success-icon { font-size:56px; margin-bottom:12px; }
@@ -253,6 +255,23 @@
                         padding:10px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
     .contact-status { font-size:12px; color:var(--g2); margin-top:6px; min-height:16px; }
 
+    .mytimes-btn { display:block; width:100%; background:#eef4ee; color:var(--g1);
+                   border:2px solid #d7e6d7; border-radius:14px; padding:14px;
+                   font-size:15px; font-weight:700; cursor:pointer; }
+    .mytimes-btn:disabled { opacity:.6; cursor:not-allowed; }
+    .mytimes-status { font-size:12px; color:var(--muted); margin-top:8px; min-height:16px; }
+    .mytimes-list { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+    .mytimes-empty { font-size:14px; color:var(--muted); text-align:center; padding:10px 0 2px; }
+    .mytimes-card { border:2px solid #e4eae4; border-radius:13px; padding:12px 14px; background:var(--card); }
+    .mytimes-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .mytimes-course { font-size:14px; font-weight:700; line-height:1.35; }
+    .mytimes-time { font-size:13px; color:var(--g2); font-weight:700; white-space:nowrap; }
+    .mytimes-meta { font-size:12px; color:var(--muted); margin-top:6px; }
+    .mytimes-btn-row { display:flex; gap:8px; margin-top:10px; }
+    .mytimes-action-btn { border:none; border-radius:10px; padding:10px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+    .mytimes-action-btn.delete { background:#fce8e6; color:#b42318; }
+    .mytimes-action-btn:disabled { opacity:.6; cursor:not-allowed; }
+
     .switch-user { display:block; text-align:center; margin-top:8px;
                    font-size:13px; color:var(--muted); cursor:pointer; }
     .switch-user:hover { color:var(--g3); }
@@ -277,29 +296,28 @@
   <div class="badge" id="hdr-badge" style="display:none"></div>
 </div>
 
-<!-- ── PIN Screen ── -->
-<div id="pin-screen">
-  <div class="pin-card">
-    <h2>Welcome</h2>
-    <p>Enter the app PIN to continue</p>
-    <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
-           maxlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;" autocomplete="off"
-           onkeydown="if(event.key==='Enter')submitPin()"/>
-    <button class="pin-btn" onclick="submitPin()">Unlock &#x203A;</button>
-    <div class="pin-err" id="pin-err"></div>
-  </div>
-</div>
-
-<!-- ── User Selection Screen ── -->
-<div id="user-screen">
+<!-- ── Login Screen ── -->
+<div id="login-screen">
   <div class="wrap">
-    <div class="sec">
-      <div class="sec-hdr"><div class="sec-icon">&#128100;</div>
-        <div><div class="sec-title">Who's Playing?</div><div class="sec-sub">Select your profile or add a new one</div></div>
+    <div class="reg-card">
+      <h2>Log In</h2>
+      <p class="reg-sub">Sign in with your Villages credentials.</p>
+      <div class="reg-field">
+        <label>TVN Username</label>
+        <input id="login-user-input" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
       </div>
-      <div class="user-grid" id="userGrid"></div>
-      <div class="new-user-card" onclick="showRegister()">+ New Golfer</div>
-      <div class="user-clear" onclick="clearSavedCreds()">Clear saved credentials</div>
+      <div class="reg-field">
+        <label>TVN Password</label>
+        <input id="login-pass-input" type="password" autocomplete="current-password" placeholder="Your thevillages.net password"/>
+      </div>
+      <div class="reg-field" style="margin-bottom:0;">
+        <label>Golf PIN</label>
+        <input id="login-pin-input" type="password" inputmode="numeric" maxlength="10" placeholder="Golf system PIN"
+               onkeydown="if(event.key==='Enter')loginUser()"/>
+      </div>
+      <button class="pin-btn" onclick="loginUser()">Log In &#x203A;</button>
+      <div class="pin-err" id="login-err"></div>
+      <div class="new-user-card" style="margin-top:14px;" onclick="showRegister()">First time? Register here</div>
     </div>
   </div>
 </div>
@@ -308,9 +326,8 @@
 <div id="reg-screen">
   <div class="wrap">
     <div class="reg-card">
-      <h2>Add Your Profile</h2>
-      <p class="reg-sub">Enter your Villages login credentials. They'll be saved for future use.</p>
-      <div class="reg-clear" onclick="clearSavedCredsAndForm()">Clear saved credentials</div>
+      <h2>Create Your Login</h2>
+      <p class="reg-sub">Enter your Villages credentials to connect this browser and start booking.</p>
       <div class="reg-field">
         <label>TVN Username</label>
         <input id="reg-user" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
@@ -328,7 +345,7 @@
         <input id="reg-email" type="email" placeholder="you@example.com"/>
       </div>
       <div class="reg-btns">
-        <button class="reg-cancel" onclick="showUserSelect()">Cancel</button>
+        <button class="reg-cancel" onclick="showLogin()">Cancel</button>
         <button class="reg-submit" id="reg-btn" onclick="registerUser()">Connect</button>
       </div>
       <div class="reg-err" id="reg-err"></div>
@@ -346,6 +363,12 @@
 <div id="app">
 <div class="wrap">
 
+  <div class="app-nav">
+    <button class="app-tab active" id="tab-book" onclick="showAppView('book')">Book Tee Time</button>
+    <button class="app-tab" id="tab-mytimes" onclick="showAppView('mytimes')">My Tee Times</button>
+  </div>
+
+  <div class="app-view active" id="view-book">
   <div class="sec" id="sec-date">
     <div class="sec-hdr"><div class="sec-icon">&#128197;</div>
       <div><div class="sec-title">Play Date</div><div class="sec-sub">Select when you'd like to play</div></div>
@@ -449,6 +472,18 @@
     </div>
     <div class="contact-status" id="emailStatus"></div>
   </div>
+  </div>
+
+  <div class="app-view" id="view-mytimes">
+  <div class="sec" id="sec-my-times">
+    <div class="sec-hdr"><div class="sec-icon">&#128221;</div>
+      <div><div class="sec-title">My Tee Times</div><div class="sec-sub">View your current reservations</div></div>
+    </div>
+    <button class="mytimes-btn" id="myTimesBtn" onclick="loadMyTeeTimes()">View My Tee Times</button>
+    <div class="mytimes-status" id="myTimesStatus"></div>
+    <div class="mytimes-list" id="myTimesList"></div>
+  </div>
+  </div>
 
   <div class="switch-user" onclick="switchUser()">&#8592; Switch Golfer</div>
 
@@ -468,146 +503,97 @@
   </div>
 </div>
 
+<div class="overlay" id="delete-overlay" onclick="if(event.target===this)closeDeleteConfirm()">
+  <div class="confirm-sheet">
+    <div class="cs-title">Confirm Delete</div>
+    <div class="cs-sub">This will delete all players on the reservation.</div>
+    <div class="cs-detail" id="delete-detail"></div>
+    <div class="cs-btns">
+      <button class="cs-cancel" onclick="closeDeleteConfirm()">Keep Reservation</button>
+      <button class="cs-delete" id="delete-confirm-btn" onclick="confirmDeleteReservation()">Delete All Players</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function esc(s){ const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
 
 // ── State ──
-let BUDDIES = [];  // populated from server after user selection
+let BUDDIES = [];  // populated from server after login
 const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
-const CREDS_KEY = 'villagesGolfCredsV1';
-
-function getSavedCreds(){
-  try{
-    const raw=localStorage.getItem(CREDS_KEY);
-    if(!raw) return null;
-    const parsed=JSON.parse(raw);
-    if(!parsed || !parsed.username || !parsed.password || !parsed.golf_pin) return null;
-    return parsed;
-  }catch(_){
-    return null;
-  }
-}
-
-function saveCreds(username, password, golfPin){
-  try{
-    localStorage.setItem(CREDS_KEY, JSON.stringify({
-      username:String(username||'').trim(),
-      password:String(password||''),
-      golf_pin:String(golfPin||'').trim(),
-    }));
-  }catch(_){}
-}
-
-function clearSavedCreds(){
-  try{ localStorage.removeItem(CREDS_KEY); }catch(_){}
-}
-
-function clearSavedCredsAndForm(){
-  clearSavedCreds();
-  document.getElementById('reg-user').value='';
-  document.getElementById('reg-pass').value='';
-  document.getElementById('reg-gpin').value='';
-  document.getElementById('reg-email').value='';
-}
+let MY_TEE_TIMES = [];
+let DELETE_PENDING = null;
 
 // ── Init: restore session on page load ──
 (async function init(){
   try{
     const r=await fetch('/api/session');
     const d=await r.json();
-    if(!d.auth){ showScreen('pin-screen'); return; }
-    // Always require explicit golfer selection after unlock.
-    loadUserSelect();
-  }catch(e){ showScreen('pin-screen'); }
+    if(d.auth && d.username){
+      enterApp(d);
+      return;
+    }
+    showLogin();
+  }catch(e){ showLogin(); }
 })();
 
 // ── Screens ──
 function showScreen(id){
-  ['pin-screen','user-screen','reg-screen','app'].forEach(s=>document.getElementById(s).style.display='none');
-  document.getElementById(id).style.display = id==='pin-screen' ? 'flex' : 'block';
+  ['login-screen','reg-screen','app'].forEach(s=>document.getElementById(s).style.display='none');
+  document.getElementById(id).style.display='block';
 }
 
-// ── PIN ──
-async function submitPin(){
-  const pin=document.getElementById('pin-input').value.trim();
-  const err=document.getElementById('pin-err');
+function enterApp(d){
+  BUDDIES=d.buddies||[];
+  S.email=d.email||'';
+  updateHeader(d.display_name || d.username, d.primary);
+  buildGolfers();
+  buildDates();
+  updateEmailUI();
+  resetMyTeeTimes();
+  showAppView('book');
+  showScreen('app');
+}
+
+function showLogin(){
+  document.getElementById('login-user-input').value='';
+  document.getElementById('login-pass-input').value='';
+  document.getElementById('login-pin-input').value='';
+  document.getElementById('login-err').textContent='';
+  showScreen('login-screen');
+}
+
+async function loginUser(){
+  const username=document.getElementById('login-user-input').value.trim();
+  const password=document.getElementById('login-pass-input').value;
+  const pin=document.getElementById('login-pin-input').value.trim();
+  const err=document.getElementById('login-err');
   err.textContent='';
+  if(!username){ err.textContent='Enter your Villages username.'; return; }
+  if(!password){ err.textContent='Enter your Villages password.'; return; }
+  if(!pin){ err.textContent='Enter your golf PIN.'; return; }
   try{
-    const r=await fetch('/api/verify-pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
+    const r=await fetch('/api/login-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,golf_pin:pin})});
     const d=await r.json();
-    if(d.ok){ loadUserSelect(); }
-    else{ err.textContent=d.error||'Incorrect PIN'; document.getElementById('pin-input').value=''; }
+    if(d.ok){
+      enterApp(d);
+    }
+    else{
+      err.textContent=d.error||'Incorrect credentials';
+      document.getElementById('login-pass-input').value='';
+      document.getElementById('login-pin-input').value='';
+    }
   }catch(e){ err.textContent='Connection error. Try again.'; }
 }
 
-// ── User Selection ──
-async function loadUserSelect(){
-  try{
-    const r=await fetch('/api/users');
-    const d=await r.json();
-    const users=d.users||[];
-    if(users.length===0){ showRegister(); return; }
-    renderUserGrid(users);
-    showScreen('user-screen');
-  }catch(e){ showRegister(); }
-}
-
-function renderUserGrid(users){
-  const grid=document.getElementById('userGrid');
-  grid.innerHTML='';
-  users.forEach(u=>{
-    const c=document.createElement('div'); c.className='u-card';
-    c.innerHTML=`<div class="u-av">${esc(u.initials||'?')}</div>
-      <div><div class="u-name">${esc(u.display_name)}</div><div class="u-sub">${esc(u.username)}</div></div>
-      <div class="u-arrow">&#x203A;</div>`;
-    c.onclick=(e)=>{ if(!e.target.closest('.u-remove')) selectUser(u.username); };
-    // Add remove button
-    const rm=document.createElement('span'); rm.className='u-remove'; rm.innerHTML='&#x2715;';
-    rm.onclick=(e)=>{ e.stopPropagation(); removeUser(u.username, u.display_name); };
-    c.appendChild(rm);
-    grid.appendChild(c);
-  });
-}
-
-async function selectUser(username){
-  try{
-    const r=await fetch('/api/select-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});
-    const d=await r.json();
-    if(d.ok){
-      BUDDIES=d.buddies||[];
-      S.email=d.email||'';
-      updateHeader(d.display_name, d.primary);
-      buildGolfers();
-      buildDates();
-      updateEmailUI();
-      showScreen('app');
-    }
-  }catch(e){ alert('Error selecting user.'); }
-}
-
-async function removeUser(username, name){
-  if(!confirm(`Remove ${name}? They can re-register later.`)) return;
-  try{
-    await fetch('/api/remove-user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});
-    const saved=getSavedCreds();
-    if(saved && String(saved.username||'').trim()===String(username||'').trim()){
-      clearSavedCreds();
-    }
-    loadUserSelect();
-  }catch(e){}
-}
-
 function showRegister(){
-  const saved=getSavedCreds();
-  document.getElementById('reg-user').value=saved?.username||'';
-  document.getElementById('reg-pass').value=saved?.password||'';
-  document.getElementById('reg-gpin').value=saved?.golf_pin||'';
+  document.getElementById('reg-user').value='';
+  document.getElementById('reg-pass').value='';
+  document.getElementById('reg-gpin').value='';
   document.getElementById('reg-email').value='';
   document.getElementById('reg-err').textContent='';
   showScreen('reg-screen');
 }
-
-function showUserSelect(){ loadUserSelect(); }
 
 async function registerUser(){
   const user=document.getElementById('reg-user').value.trim();
@@ -629,14 +615,7 @@ async function registerUser(){
     document.getElementById('reg-btn').disabled=false;
 
     if(d.ok){
-      saveCreds(user, pass, gpin);
-      BUDDIES=d.buddies||[];
-      S.email=d.email||'';
-      updateHeader(d.display_name, d.primary);
-      buildGolfers();
-      buildDates();
-      updateEmailUI();
-      showScreen('app');
+      enterApp(d);
     } else {
       err.textContent=d.error||'Registration failed.';
     }
@@ -657,10 +636,137 @@ function updateHeader(name, primary){
 // ── Switch user ──
 async function switchUser(){
   try{
-    await fetch('/api/clear-user',{method:'POST'});
+    await fetch('/api/logout',{method:'POST'});
   }catch(e){}
   resetApp();
-  loadUserSelect();
+  resetMyTeeTimes();
+  showLogin();
+}
+
+function resetMyTeeTimes(){
+  const list=document.getElementById('myTimesList');
+  const status=document.getElementById('myTimesStatus');
+  const btn=document.getElementById('myTimesBtn');
+  MY_TEE_TIMES=[];
+  DELETE_PENDING=null;
+  if(list) list.innerHTML='';
+  if(status){ status.textContent=''; status.style.color='var(--muted)'; }
+  if(btn) btn.disabled=false;
+  closeDeleteConfirm();
+}
+
+function showAppView(view){
+  const isMyTimes=view==='mytimes';
+  document.getElementById('view-book').classList.toggle('active', !isMyTimes);
+  document.getElementById('view-mytimes').classList.toggle('active', isMyTimes);
+  document.getElementById('tab-book').classList.toggle('active', !isMyTimes);
+  document.getElementById('tab-mytimes').classList.toggle('active', isMyTimes);
+}
+
+function setMyTimesStatus(message, tone='muted'){
+  const status=document.getElementById('myTimesStatus');
+  if(!status) return;
+  status.textContent=message||'';
+  status.style.color = tone==='success' ? 'var(--g2)' : tone==='error' ? '#c0392b' : 'var(--muted)';
+}
+
+function closeDeleteConfirm(){
+  const overlay=document.getElementById('delete-overlay');
+  if(overlay) overlay.classList.remove('show');
+}
+
+function openDeleteConfirm(reservationNo){
+  if(!reservationNo) return;
+  const item=(MY_TEE_TIMES||[]).find(x=>String(x.reservation_no||'')===String(reservationNo));
+  DELETE_PENDING=item||{reservation_no:reservationNo};
+  document.getElementById('delete-detail').innerHTML =
+    `<div class="cs-row"><span>Reservation</span><span>${esc(String(reservationNo))}</span></div>`+
+    `<div class="cs-row"><span>Date</span><span>${esc(item?.date || 'Unknown')}</span></div>`+
+    `<div class="cs-row"><span>Time</span><span>${esc(item?.display_time || 'Unknown')}</span></div>`+
+    `<div class="cs-row"><span>Course</span><span>${esc(item?.course || 'Unknown')}</span></div>`;
+  document.getElementById('delete-confirm-btn').disabled=false;
+  document.getElementById('delete-confirm-btn').textContent='Delete All Players';
+  document.getElementById('delete-overlay').classList.add('show');
+}
+
+function renderMyTeeTimes(items){
+  const list=document.getElementById('myTimesList');
+  MY_TEE_TIMES=items||[];
+  if(!items || items.length===0){
+    list.innerHTML='<div class="mytimes-empty">No current tee times were found.</div>';
+    return;
+  }
+  list.innerHTML=items.map(item=>{
+    const course=esc(item.course || 'Reservation');
+    const displayTime=esc(item.display_time || 'Time unavailable');
+    const date=esc(item.date || 'Date unavailable');
+    const resNo=item.reservation_no ? esc(`Reservation #${item.reservation_no}`) : '';
+    const phone=item.phone ? esc(item.phone) : '';
+    const canDelete=(item.actions||[]).some(action=>String(action).toLowerCase().includes('delete all players'));
+    return `<div class="mytimes-card">
+      <div class="mytimes-top">
+        <div class="mytimes-course">${course}</div>
+        <div class="mytimes-time">${displayTime}</div>
+      </div>
+      <div class="mytimes-meta">${date}</div>
+      <div class="mytimes-meta">${resNo}${phone ? `${resNo ? ' • ' : ''}Phone ${phone}` : ''}</div>
+      ${canDelete && item.reservation_no ? `<div class="mytimes-btn-row"><button class="mytimes-action-btn delete" onclick="openDeleteConfirm('${esc(item.reservation_no)}')">Delete All Players</button></div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function loadMyTeeTimes(){
+  const btn=document.getElementById('myTimesBtn');
+  const status=document.getElementById('myTimesStatus');
+  const list=document.getElementById('myTimesList');
+  btn.disabled=true;
+  setMyTimesStatus('Loading your reservations...');
+  list.innerHTML='';
+  showAppView('mytimes');
+  try{
+    const r=await fetch('/api/my-tee-times');
+    const d=await r.json();
+    if(d.success){
+      setMyTimesStatus(`Found ${(d.reservations||[]).length} reservation${(d.reservations||[]).length===1?'':'s'}.`);
+      renderMyTeeTimes(d.reservations||[]);
+    }else{
+      setMyTimesStatus(d.error||'Could not load your tee times.','error');
+    }
+  }catch(e){
+    setMyTimesStatus('Connection error. Try again.','error');
+  }finally{
+    btn.disabled=false;
+  }
+}
+
+async function confirmDeleteReservation(){
+  const reservationNo=DELETE_PENDING?.reservation_no;
+  if(!reservationNo) return;
+
+  const btn=document.getElementById('delete-confirm-btn');
+  btn.disabled=true;
+  btn.textContent='Deleting...';
+  setMyTimesStatus(`Deleting reservation #${reservationNo}...`);
+  try{
+    const r=await fetch('/api/delete-reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reservation_no:reservationNo})});
+    const d=await r.json();
+    if(d.success){
+      closeDeleteConfirm();
+      if(Array.isArray(d.reservations)){
+        setMyTimesStatus(d.message || `Reservation #${reservationNo} deleted successfully.`,'success');
+        renderMyTeeTimes(d.reservations||[]);
+      }else{
+        setMyTimesStatus(d.message || `Reservation #${reservationNo} deleted successfully. Refreshing reservations...`,'success');
+        await loadMyTeeTimes();
+      }
+    }else{
+      closeDeleteConfirm();
+      setMyTimesStatus(d.error||'Could not delete reservation.','error');
+    }
+  }catch(e){
+    closeDeleteConfirm();
+    setMyTimesStatus('Connection error while deleting reservation.','error');
+  }
 }
 
 // ── Build dates ──

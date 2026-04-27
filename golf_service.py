@@ -7,9 +7,12 @@ tee-time booking system. Mirrors the exact flow used in the live session.
 import os
 import re
 import time as _time
+import logging
 
 from course_metadata import lookup_course_metadata
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
+logger = logging.getLogger(__name__)
 
 # Set HEADLESS=false in .env to watch the browser during local testing
 _HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
@@ -129,6 +132,14 @@ def _clean_golfer_name(raw_name, golfer_id=None):
     return name
 
 
+def _normalize_space(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _timeout_error():
+    return "The Villages golf site took too long to respond. Please try again."
+
+
 def _initials(name):
     """Derive initials from a name like 'Worley, Walter Douglas' or 'Walter Worley'."""
     name = name.strip()
@@ -235,7 +246,10 @@ class GolfService:
         page.locator('input[type="text"]').first.fill(tvn_username)
         page.locator('input[type="password"]').first.fill(tvn_password)
         page.locator('input[type="image"]').click()
-        page.wait_for_load_state("networkidle", timeout=15000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
 
         if "login" in page.url.lower():
             raise RuntimeError("TVN login failed — check username / password")
@@ -279,14 +293,12 @@ class GolfService:
 
     def _nav_to_glf109c(self, page, num_golfers, has_guests, course_type):
         """Navigate from glf100 through glf109b to glf109c."""
-        print(f"DEBUG: URL is {page.url}")
-        print(f"DEBUG: CONTENT is {page.inner_text('body')}")
         # glf109a
         page.locator("a", has_text="Reservations-View Open Tee Times").click()
         page.wait_for_url("**/glf109a**", timeout=10000)
 
         # glf109b
-        page.locator("a", has_text="Create New Reservation").click()
+        page.get_by_role("link", name="Create New Reservation", exact=True).click()
         page.wait_for_url("**/glf109b**", timeout=10000)
 
         page.locator('table input[type="text"]').first.fill(str(num_golfers))
@@ -294,6 +306,94 @@ class GolfService:
         page.locator("select").select_option(_COURSE_TYPE_CODES.get(course_type, "02"))
         page.locator("a", has_text="Continue to Enter Golfers").click()
         page.wait_for_url("**/glf109c**", timeout=10000)
+
+    def _nav_to_glf109a(self, page):
+        """Navigate from glf100 to the reservations menu page (glf109a)."""
+        page.locator("a", has_text="Reservations-View Open Tee Times").click()
+        page.wait_for_url("**/glf109a**", timeout=10000)
+
+    def _extract_reservations(self, page):
+        """Scrape outstanding reservations from glf109a."""
+        raw_rows = page.evaluate("""() => {
+            const rows = Array.from(document.querySelectorAll("table tr"));
+            return rows.map(row => {
+                const cells = Array.from(row.querySelectorAll("td")).map(cell =>
+                    (cell.innerText || "").replace(/\\s+/g, " ").trim()
+                );
+                const links = Array.from(row.querySelectorAll("a")).map(link =>
+                    (link.innerText || "").replace(/\\s+/g, " ").trim()
+                ).filter(Boolean);
+                return {cells, links};
+            }).filter(row => row.cells.some(Boolean));
+        }""")
+
+        reservations = []
+        for row in raw_rows:
+            cells = row.get("cells") or []
+            if len(cells) < 3:
+                continue
+
+            action_text = _normalize_space(cells[0])
+            reservation_text = _normalize_space(cells[1])
+            description_text = _normalize_space(cells[2])
+            combined = " ".join(x for x in [action_text, reservation_text, description_text] if x).lower()
+
+            if not combined:
+                continue
+            if "action" in combined and "open reservations" in combined:
+                continue
+            if "create new reservation" in action_text.lower():
+                continue
+
+            reservation_no = None
+            res_match = re.search(r"reservation\s*no\.?\s*(\d+)", reservation_text, re.IGNORECASE)
+            if res_match:
+                reservation_no = res_match.group(1)
+            if not reservation_no:
+                continue
+
+            description_lines = [line.strip() for line in str(cells[2] or "").splitlines() if line.strip()]
+            description = _normalize_space(" ".join(description_lines)) or description_text
+
+            date = None
+            time = None
+            display_time = None
+            course = None
+            phone = None
+
+            for line in description_lines:
+                date_match = re.search(r"([A-Za-z]+):\s*(\d{1,2}/\d{1,2})\s+at\s+(\d{1,2}:\d{2}\s*[AP]M)", line, re.IGNORECASE)
+                if date_match:
+                    date = f"{date_match.group(1)}: {date_match.group(2)}"
+                    display_time = _normalize_space(date_match.group(3).upper())
+                    continue
+                course_match = re.search(r"Course:\s*(.+)", line, re.IGNORECASE)
+                if course_match:
+                    course = _normalize_space(course_match.group(1))
+                    continue
+                phone_match = re.search(r"Phone:\s*(.+)", line, re.IGNORECASE)
+                if phone_match:
+                    phone = _normalize_space(phone_match.group(1))
+
+            if display_time:
+                time = display_time
+            if not course:
+                course = description
+
+            actions = row.get("links") or []
+
+            reservations.append({
+                "reservation_no": reservation_no,
+                "date": date,
+                "time": time,
+                "display_time": display_time or "",
+                "course": course,
+                "phone": phone,
+                "actions": actions,
+                "summary": description,
+            })
+
+        return reservations
 
     def _setup_reservation(self, page, num_golfers, has_guests, course_type,
                            golfer_ids, date_str):
@@ -400,15 +500,16 @@ class GolfService:
 
             return {"success": True, "primary": primary, "buddies": buddies}
 
-        except PWTimeout as e:
+        except PWTimeout:
             self._close_session()
-            return {"success": False, "error": f"Page timed out: {e}"}
+            return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
             self._close_session()
             return {"success": False, "error": str(e)}
-        except Exception as e:
+        except Exception:
+            logger.exception("fetch_buddy_list failed for user=%s", tvn_username)
             self._close_session()
-            return {"success": False, "error": f"Unexpected error: {e}"}
+            return {"success": False, "error": "Could not connect to the golf system. Please try again."}
 
     def get_available_times(self, tvn_username, tvn_password, golf_password,
                             date_str, date_label, course_type, region_filter,
@@ -429,17 +530,183 @@ class GolfService:
             }
             self._session_ts = _time.time()  # refresh TTL
             return {"success": True, "times": times, "date_label": date_label}
-        except PWTimeout as e:
-            import traceback; traceback.print_exc()
+        except PWTimeout:
             self._close_session()
-            return {"success": False, "error": f"Page timed out: {e}"}
+            return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
             self._close_session()
             return {"success": False, "error": str(e)}
-        except Exception as e:
-            import traceback; traceback.print_exc()
+        except Exception:
+            logger.exception("get_available_times failed for user=%s", tvn_username)
             self._close_session()
-            return {"success": False, "error": f"Unexpected error: {e}"}
+            return {"success": False, "error": "Could not fetch tee times right now. Please try again."}
+
+    def view_my_tee_times(self, tvn_username, tvn_password, golf_password):
+        """Return the current user's outstanding reservations from glf109a."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_glf109a(page)
+            reservations = self._extract_reservations(page)
+            self._session_ts = _time.time()
+            return {"success": True, "reservations": reservations}
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("view_my_tee_times failed for user=%s", tvn_username)
+            self._close_session()
+            return {"success": False, "error": "Could not load your tee times right now. Please try again."}
+
+    def delete_reservation(self, tvn_username, tvn_password, golf_password, reservation_no):
+        """Click 'DELETE ALL PLAYERS ON THIS RESERVATION' for a reservation."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            current_url = (page.url or "").lower()
+            if "glf109a" not in current_url:
+                return {
+                    "success": False,
+                    "error": "Reservations page is no longer active. Please tap View My Tee Times again before deleting.",
+                }
+
+            target_index = page.evaluate("""reservationNo => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                for (let i = 0; i < rows.length; i++) {
+                    const cells = rows[i].querySelectorAll('td');
+                    if (cells.length < 3) continue;
+                    const reservationText = (cells[1].innerText || '').replace(/\\s+/g, ' ').trim();
+                    if (reservationText.includes(String(reservationNo))) return i;
+                }
+                return -1;
+            }""", str(reservation_no))
+
+            if target_index < 0:
+                return {"success": False, "error": "Reservation not found."}
+
+            clicked = page.evaluate("""rowIndex => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                const row = rows[rowIndex];
+                if (!row) return false;
+                const links = Array.from(row.querySelectorAll('a'));
+                const target = links.find(link =>
+                    /delete\\s+all\\s+players\\s+on\\s+this\\s+reservation/i.test((link.innerText || '').trim())
+                );
+                if (!target) return false;
+                target.click();
+                return true;
+            }""", int(target_index))
+
+            if not clicked:
+                return {"success": False, "error": "Delete action is not available for this reservation."}
+
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+
+            # Step 2: the site shows a dedicated confirmation page. Stay on the
+            # same live session/page and wait specifically for that page before
+            # doing anything else. Do not re-login/re-navigate until after the
+            # final delete click has been attempted.
+            confirm_ready = False
+            try:
+                page.locator(f"text=Delete Reservation No. {reservation_no}").first.wait_for(timeout=8000)
+                confirm_ready = True
+            except Exception:
+                pass
+            if not confirm_ready:
+                try:
+                    page.locator("text=DO NOT DELETE THIS RESERVATION").first.wait_for(timeout=3000)
+                    confirm_ready = True
+                except Exception:
+                    pass
+
+            if not confirm_ready:
+                body_text = _normalize_space(page.inner_text("body"))
+                return {
+                    "success": False,
+                    "error": "Delete confirmation page did not appear after the first delete click.",
+                    "debug_page": body_text[:500],
+                }
+
+            confirm_link = page.locator("a", has_text="DELETE ALL PLAYERS ON THIS RESERVATION")
+            if confirm_link.count() == 0:
+                return {"success": False, "error": "Delete confirmation page appeared, but the final delete link was not found."}
+
+            def _accept_dialog(dialog):
+                try:
+                    dialog.accept()
+                except Exception:
+                    pass
+
+            page.once("dialog", _accept_dialog)
+
+            confirm_target = confirm_link.last
+            confirm_target.scroll_into_view_if_needed(timeout=5000)
+            confirm_target.wait_for(state="visible", timeout=5000)
+
+            clicked_confirm = page.evaluate("""() => {
+                const links = Array.from(document.querySelectorAll('a'));
+                const target = links.find(link =>
+                    (link.innerText || '').replace(/\\s+/g, ' ').trim() === 'DELETE ALL PLAYERS ON THIS RESERVATION'
+                );
+                if (!target) return false;
+                target.scrollIntoView({block: 'center'});
+                target.click();
+                return true;
+            }""")
+            if not clicked_confirm:
+                confirm_target.click(timeout=5000, force=True)
+
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+
+            current_url = (page.url or "").lower()
+            if "glf109a" not in current_url:
+                menu_button = page.locator("input[name='Menu'], input[value='Go to Menu'], input[value='Menu']")
+                if menu_button.count() > 0:
+                    menu_button.first.click(timeout=5000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    current_url = (page.url or "").lower()
+                if "glf109a" not in current_url:
+                    return {
+                        "success": True,
+                        "reservation_no": str(reservation_no),
+                        "reservations": None,
+                        "needs_refresh": True,
+                        "message": "Reservation delete completed. Refreshing reservations is recommended.",
+                        "debug_page": _normalize_space(page.inner_text("body"))[:500],
+                    }
+
+            remaining = self._extract_reservations(page)
+            still_exists = any(str(item.get("reservation_no") or "") == str(reservation_no) for item in remaining)
+            if still_exists:
+                return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
+
+            self._session_ts = _time.time()
+            return {"success": True, "reservation_no": str(reservation_no), "reservations": remaining}
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception(
+                "delete_reservation failed for user=%s reservation_no=%s",
+                tvn_username,
+                reservation_no,
+            )
+            self._close_session()
+            return {"success": False, "error": "Could not delete that reservation right now. Please try again."}
 
     def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str):
         try:
@@ -523,12 +790,18 @@ class GolfService:
                 "message":        f"Booked! Reservation #{res_no} \u2014 {course_name} at {_display_time(time_str)}",
             }
 
-        except PWTimeout as e:
+        except PWTimeout:
             self._close_session()
-            return {"success": False, "error": f"Page timed out: {e}"}
+            return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
             self._close_session()
             return {"success": False, "error": str(e)}
-        except Exception as e:
+        except Exception:
+            logger.exception(
+                "book_tee_time failed for user=%s course=%s time=%s",
+                tvn_username,
+                course_name,
+                time_str,
+            )
             self._close_session()
-            return {"success": False, "error": f"Booking failed: {e}"}
+            return {"success": False, "error": "Booking failed. Please try again."}

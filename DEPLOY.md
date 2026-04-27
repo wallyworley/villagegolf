@@ -7,7 +7,8 @@ Estimated time: **20–30 minutes** (most of it is waiting for builds).
 
 ## What You'll Need
 - A Google Cloud account ✓
-- A PIN you'll use to unlock the app on your phone (any 4+ digits)
+- Firestore enabled in your project (Native mode, same region as Cloud Run)
+- A stable `SECRET_KEY` value (generate **once**, reuse on every deploy)
 - A verified sender set up in MailerSend:
   - API token
   - From email address
@@ -17,7 +18,7 @@ Estimated time: **20–30 minutes** (most of it is waiting for builds).
 
 ## Step 1 — Install Google Cloud CLI
 
-1. Go to: https://cloud.google.com/sdk/docs/install
+1. Go to: https://clocdud.google.com/sdk/docs/install
 2. Download and run the installer for Mac
 3. Open **Terminal** and run:
    ```
@@ -32,7 +33,10 @@ Estimated time: **20–30 minutes** (most of it is waiting for builds).
 ```bash
 gcloud services enable run.googleapis.com
 gcloud services enable cloudbuild.googleapis.com
+gcloud services enable firestore.googleapis.com
 ```
+
+If you haven't already created a Firestore database, do so in the Cloud Console (Firestore → Create database → **Native mode** → same region as Cloud Run, e.g. `us-east1`). User profiles are stored here so they survive redeploys and scaling.
 
 ---
 
@@ -44,7 +48,19 @@ cd ~/Documents/villages-golf-app
 
 ---
 
-## Step 4 — Deploy to Cloud Run
+## Step 4 — Generate Your `SECRET_KEY` (one time only)
+
+Run this **once** and save the output somewhere safe (password manager, sticky note, whatever):
+
+```bash
+openssl rand -hex 32
+```
+
+You'll paste that same value into every deploy command from now on. **Do not** regenerate it — doing so logs everyone out of the app, because Flask uses it to sign session cookies.
+
+---
+
+## Step 5 — Deploy to Cloud Run
 
 Copy this command, fill in your values, then run it in Terminal:
 
@@ -55,23 +71,21 @@ gcloud run deploy villages-golf \
   --allow-unauthenticated \
   --memory 2Gi \
   --timeout 180 \
-  --set-env-vars "APP_PIN=YOUR_CHOSEN_PIN" \
   --set-env-vars "MAILERSEND_API_TOKEN=YOUR_MAILERSEND_API_TOKEN" \
   --set-env-vars "MAIL_FROM_EMAIL=YOUR_VERIFIED_FROM_EMAIL" \
   --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
-  --set-env-vars "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  --set-env-vars "SECRET_KEY=YOUR_SAVED_SECRET_KEY"
 ```
 
 Replace:
 | Placeholder | Replace with |
 |---|---|
-| `YOUR_CHOSEN_PIN` | A PIN to unlock the app (e.g. `7291`) |
 | `YOUR_MAILERSEND_API_TOKEN` | Your MailerSend API token |
 | `YOUR_VERIFIED_FROM_EMAIL` | A sender address verified in MailerSend |
 
 Build takes about 5–8 minutes.
 
-The app no longer stores Villages credentials in Cloud Run environment variables. Each golfer enters their own Villages username, password, and golf PIN inside the app when registering.
+The app no longer stores Villages credentials in Cloud Run environment variables. Each golfer enters their own Villages username, password, and golf PIN inside the app when registering. After logging in once on a device, the Flask session keeps them signed in.
 
 ### How Environment Variables Work
 
@@ -94,11 +108,10 @@ gcloud run deploy villages-golf \
   --allow-unauthenticated \
   --memory 2Gi \
   --timeout 180 \
-  --set-env-vars "APP_PIN=7291" \
   --set-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE" \
   --set-env-vars "MAIL_FROM_EMAIL=your-verified-sender@example.com" \
   --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
-  --set-env-vars "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  --set-env-vars "SECRET_KEY=YOUR_SAVED_SECRET_KEY"
 ```
 
 Replace:
@@ -106,11 +119,12 @@ Replace:
 |---|---|
 | `YOUR_NEW_TOKEN_HERE` | Your MailerSend API token |
 | `your-verified-sender@example.com` | A sender address verified in MailerSend |
-| `7291` | Your app PIN |
+| `YOUR_SAVED_SECRET_KEY` | The hex string you generated once in Step 4 |
 
 Important:
 - Since your previous MailerSend token was exposed, rotate it in MailerSend first and use the new token in this command.
 - `MAIL_FROM_EMAIL` must be a verified MailerSend sender address or email sending will fail.
+- Reuse the **same** `SECRET_KEY` on every deploy. Changing it invalidates all login sessions.
 
 ### First Deploy Checklist
 
@@ -129,7 +143,7 @@ gcloud run services logs read villages-golf --region us-east1
 
 ---
 
-## Step 5 — Get Your App URL
+## Step 6 — Get Your App URL
 
 After deploy you'll see:
 ```
@@ -140,7 +154,7 @@ Open it in any browser and bookmark it on your phone.
 
 ---
 
-## Step 6 — Add to iPhone Home Screen
+## Step 7 — Add to iPhone Home Screen
 
 1. Open the URL in **Safari** on your iPhone
 2. Tap the **Share** button (bottom center)
