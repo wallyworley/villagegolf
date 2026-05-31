@@ -6,3 +6,7 @@ certifi==2024.8.30
 # User profiles are stored in SQLite (stdlib `sqlite3`) — no external store.
 # google-cloud-firestore is no longer a runtime dependency; it is only needed
 # to run migrate_firestore_to_sqlite.py once during the cutover.
+#
+# Ubuntu 24.04 (Noble) note: `playwright install-deps` fails because it asks
+# for pre-t64 lib names. Install the system libs manually instead — see
+# DEPLOY_VPS_NOTES.md for the exact apt-get command.
