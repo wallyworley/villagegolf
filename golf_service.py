@@ -805,3 +805,385 @@ class GolfService:
             )
             self._close_session()
             return {"success": False, "error": "Booking failed. Please try again."}
+
+    # ── Requests (Requests and Templates feature) ─────────────────────────────
+    # Note: Single Group only (max 4 golfers). Templates feature deferred.
+
+    def _nav_to_requests_landing(self, page):
+        """Navigate from glf100 to the Requests landing page."""
+        logger.info("requests.nav_landing url=%s", page.url)
+        page.locator("a", has_text="Requests and Templates").first.click(timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        logger.info("requests.nav_landing.done url=%s", page.url)
+
+    def _open_create_new_request(self, page):
+        """From the Requests landing page, click 'Create New Request'."""
+        logger.info("requests.open_form url=%s", page.url)
+        page.locator("a", has_text="Create New Request").first.click(timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        logger.info("requests.open_form.done url=%s", page.url)
+
+    def _format_site_time(self, t):
+        """Convert "12:00" / "9:00" to the 4-digit format the site accepts (1200, 0900).
+        Returns empty string for empty input."""
+        if not t:
+            return ""
+        digits = "".join(ch for ch in str(t) if ch.isdigit())
+        if not digits:
+            return ""
+        if len(digits) == 3:
+            digits = "0" + digits
+        return digits[:4].zfill(4)
+
+    def _request_date_value(self, play_date):
+        """Convert UI date strings to the request form's YYYYMMDD option value."""
+        raw = str(play_date or "").strip()
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+        if m:
+            month, day, year = m.groups()
+            return f"{year}{int(month):02d}{int(day):02d}"
+        m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw)
+        if m:
+            year, month, day = m.groups()
+            return f"{year}{int(month):02d}{int(day):02d}"
+        return raw
+
+    def _scrape_available_courses(self, page):
+        """On the course selection page, return the list of available course
+        labels from the 'Available Courses' listbox in the order shown."""
+        # The course-selection page has two <select> elements (multiple).
+        # The first is "Available Courses", the second is "Selected Courses".
+        return page.evaluate("""() => {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const multi = selects.filter(s => s.multiple);
+            const src = multi.length > 0 ? multi[0] : selects[0];
+            if (!src) return [];
+            return Array.from(src.options).map(o => (o.innerText || o.value || '').trim()).filter(Boolean);
+        }""") or []
+
+    def _fill_request_form(self, page, play_date, max_golfers, has_guests,
+                           course_type, any_course, time_to_play,
+                           earliest_time, latest_time, preference):
+        """Fill the first request form (Play Date, Max Golfers, etc.)."""
+        filled = page.evaluate(
+            """(values) => {
+                const form = document.forms.reqdta;
+                if (!form) return false;
+                const eventOpts = { bubbles: true };
+                const fire = el => {
+                    el.dispatchEvent(new Event('input', eventOpts));
+                    el.dispatchEvent(new Event('change', eventOpts));
+                };
+                const setValue = (name, value) => {
+                    const field = form.elements[name];
+                    if (!field) return false;
+                    field.value = String(value);
+                    fire(field);
+                    return true;
+                };
+                const setRadio = (name, value) => {
+                    const radios = Array.from(form.querySelectorAll(`input[name="${name}"]`));
+                    if (!radios.length) return false;
+                    const radio = radios.find(r => r.value === value);
+                    if (!radio) return false;
+                    radio.checked = true;
+                    fire(radio);
+                    return true;
+                };
+
+                const ok = [];
+                ok.push(setValue('playdate', values.playDate));
+                ok.push(setValue('noofglf', values.maxGolfers));
+                ok.push(setRadio('anygsts', values.hasGuests ? 'Y' : 'N'));
+                ok.push(setValue('crstype', values.courseTypeCode));
+                ok.push(setRadio('anycrs', values.anyCourse ? 'Y' : 'N'));
+                ok.push(setValue('exactt', values.timeToPlay));
+                ok.push(setValue('strtt', values.earliestTime));
+                ok.push(setValue('latet', values.latestTime));
+                ok.push(setRadio('pref', values.preference === 'Course' ? 'C' : 'T'));
+                return ok.every(Boolean);
+            }""",
+            {
+                "playDate": self._request_date_value(play_date),
+                "maxGolfers": max_golfers,
+                "hasGuests": has_guests,
+                "courseTypeCode": _COURSE_TYPE_CODES.get(course_type, "01"),
+                "anyCourse": any_course,
+                "timeToPlay": self._format_site_time(time_to_play) or "1100",
+                "earliestTime": self._format_site_time(earliest_time) or "0700",
+                "latestTime": self._format_site_time(latest_time) or "0600",
+                "preference": preference if preference in ("Course", "Time") else "Course",
+            },
+        )
+        if not filled:
+            raise RuntimeError("Request form layout was not recognized.")
+
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+            page.evaluate("document.forms.reqdta.submit()")
+
+    def _select_request_courses(self, page, course_choices):
+        """On the course selection page, select the user's chosen courses in
+        preference order using the >> button. course_choices is a list of
+        course labels exactly as they appear in the Available Courses listbox."""
+        if not course_choices:
+            return
+        selects = page.locator("select").all()
+        if len(selects) < 2:
+            raise RuntimeError("Course selection page layout unexpected.")
+        available = selects[0]
+
+        for label in course_choices:
+            try:
+                available.select_option(label=label)
+            except Exception:
+                # Try by exact text (the option innerText may include whitespace)
+                available.evaluate(
+                    "(sel, target) => {"
+                    "  for (const o of sel.options) {"
+                    "    if ((o.innerText || '').trim() === target) {"
+                    "      o.selected = true; sel.dispatchEvent(new Event('change')); return;"
+                    "    }"
+                    "  }"
+                    "}",
+                    label,
+                )
+            # Click the >> button to move it into Selected Courses.
+            page.locator('input[type="button"]').evaluate_all(
+                """buttons => {
+                    const btn = buttons.find(b => (b.value || '').includes('>>'));
+                    if (!btn) throw new Error('Move course button not found');
+                    btn.click();
+                }"""
+            )
+
+    def _fill_request_golfers(self, page, golfer_ids):
+        """On the golfer entry page, fill Group 1 Golfer N rows with IDs."""
+        ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
+        if not ids:
+            raise RuntimeError("No golfer IDs provided for request.")
+
+        # Fill Golfer ID inputs in row order. The page has a Golfer ID text
+        # input and a Name <select> per row; filling the ID typically auto-
+        # populates the name on blur, but we also try to set the name dropdown.
+        for idx, gid in enumerate(ids[:4]):  # Group 1 = up to 4 slots
+            field_name = f"glfers{idx + 1}"
+            field = page.locator(f'input[name="{field_name}"]').first
+            field.fill(gid)
+            field.blur()
+
+        # Try to find a name dropdown per row and select by value (golfer id).
+        for idx, gid in enumerate(ids[:4]):
+            select_name = f"buddy{idx + 1}"
+            try:
+                page.locator(f'select[name="{select_name}"]').first.select_option(value=gid)
+            except Exception:
+                pass  # ID-only fill may be enough
+
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=25000):
+            page.locator('input[name="but2"]').first.click()
+
+    def _extract_request_confirmation(self, page):
+        """On the confirmation page, scrape the Request No."""
+        body = page.inner_text("body")
+        m = re.search(r"Request\s*No\.?\s*[:\-]?\s*(\d+)", body, re.IGNORECASE)
+        return m.group(1) if m else None
+
+    def fetch_request_courses(self, tvn_username, tvn_password, golf_password,
+                              play_date, course_type="Championship",
+                              any_course=False):
+        """Open the request form just far enough to scrape the available
+        courses for a given date + course type, then navigate back to the menu.
+        Returns {success, courses: [labels]}."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+            self._open_create_new_request(page)
+            self._fill_request_form(
+                page,
+                play_date=play_date,
+                max_golfers=1,
+                has_guests=False,
+                course_type=course_type,
+                any_course=any_course,
+                time_to_play="",
+                earliest_time="",
+                latest_time="",
+                preference="Course",
+            )
+            courses = self._scrape_available_courses(page)
+            # Try to back out to the menu so the session is reusable.
+            try:
+                page.locator("a", has_text="Back to the Menu").first.click(timeout=3000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._session_ts = _time.time()
+            return {"success": True, "courses": courses}
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("fetch_request_courses failed for user=%s", tvn_username)
+            self._close_session()
+            return {"success": False, "error": "Could not load course list. Please try again."}
+
+    def submit_request(self, tvn_username, tvn_password, golf_password,
+                       play_date, max_golfers, has_guests, course_type,
+                       any_course, time_to_play, earliest_time, latest_time,
+                       preference, course_choices, golfer_ids):
+        """Submit a tee-time request. Returns {success, request_no}."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+            self._open_create_new_request(page)
+            self._fill_request_form(
+                page,
+                play_date=play_date,
+                max_golfers=max_golfers,
+                has_guests=has_guests,
+                course_type=course_type,
+                any_course=any_course,
+                time_to_play=time_to_play,
+                earliest_time=earliest_time,
+                latest_time=latest_time,
+                preference=preference,
+            )
+            self._select_request_courses(page, course_choices)
+            self._fill_request_golfers(page, golfer_ids)
+            request_no = self._extract_request_confirmation(page)
+            self._session_ts = _time.time()
+            if not request_no:
+                return {"success": False, "error": "Request submitted but no confirmation number was returned."}
+            return {
+                "success": True,
+                "request_no": request_no,
+                "message": f"Request #{request_no} submitted",
+            }
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("submit_request failed for user=%s", tvn_username)
+            self._close_session()
+            return {"success": False, "error": "Could not submit request. Please try again."}
+
+    def view_my_requests(self, tvn_username, tvn_password, golf_password):
+        """Scrape pending requests from the Requests landing page."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+
+            raw_rows = page.evaluate("""() => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                return rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td')).map(c =>
+                        (c.innerText || '').replace(/\\s+/g, ' ').trim()
+                    );
+                    const links = Array.from(row.querySelectorAll('a')).map(a => ({
+                        text: (a.innerText || '').trim(),
+                        href: a.getAttribute('href') || '',
+                    }));
+                    return { cells, links };
+                }).filter(r => r.cells.some(Boolean));
+            }""")
+
+            requests_out = []
+            for row in raw_rows:
+                cells = row.get("cells") or []
+                links = row.get("links") or []
+                if len(cells) < 3:
+                    continue
+                action = (cells[0] or "").strip()
+                name = (cells[1] or "").strip()
+                date = (cells[2] or "").strip()
+                lower = action.lower()
+                if not action or "create new" in lower or "action" in lower:
+                    continue
+                # An existing request row will have a request number we can use as ID.
+                rid = None
+                for link in links:
+                    href = link.get("href", "")
+                    m = re.search(r"(\d{5,})", href)
+                    if m:
+                        rid = m.group(1)
+                        break
+                if not rid:
+                    m = re.search(r"(\d{5,})", " ".join([action, name]))
+                    if m:
+                        rid = m.group(1)
+                if not rid:
+                    continue
+                requests_out.append({
+                    "request_id": rid,
+                    "action": action,
+                    "name": name,
+                    "date": date,
+                })
+
+            self._session_ts = _time.time()
+            return {"success": True, "requests": requests_out}
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("view_my_requests failed for user=%s", tvn_username)
+            self._close_session()
+            return {"success": False, "error": "Could not load your requests. Please try again."}
+
+    def delete_request(self, tvn_username, tvn_password, golf_password, target_request_id):
+        """Cancel a pending request by ID from the Requests landing page."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+
+            # Find the row containing this request id and click its delete/cancel link.
+            target = str(target_request_id).strip()
+            handled = page.evaluate("""(rid) => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                for (const row of rows) {
+                    const text = (row.innerText || '');
+                    if (text.includes(rid)) {
+                        const link = row.querySelector('a');
+                        if (link) { link.click(); return true; }
+                    }
+                }
+                return false;
+            }""", target)
+
+            if not handled:
+                return {"success": False, "error": "Request not found."}
+
+            page.wait_for_load_state("networkidle", timeout=15000)
+            # If a confirmation prompt appears, accept it.
+            try:
+                page.on("dialog", lambda d: d.accept())
+                page.locator('input[value="Yes"], input[value="Delete"], input[value="Cancel Request"]').first.click(timeout=3000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+
+            self._session_ts = _time.time()
+            return {"success": True, "message": f"Request {target} canceled"}
+        except PWTimeout:
+            self._close_session()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_session()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("delete_request failed for user=%s", tvn_username)
+            self._close_session()
+            return {"success": False, "error": "Could not cancel that request. Please try again."}

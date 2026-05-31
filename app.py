@@ -48,6 +48,10 @@ _WORKER_PUBLIC_ERRORS = {
     "my_tee_times": "Could not load your tee times right now. Please try again.",
     "delete_reservation": "Could not delete that reservation right now. Please try again.",
     "book": "Booking failed. Please try again.",
+    "request_courses": "Could not load course list. Please try again.",
+    "submit_request": "Could not submit request. Please try again.",
+    "my_requests": "Could not load your requests. Please try again.",
+    "delete_request": "Could not cancel that request. Please try again.",
 }
 
 
@@ -800,6 +804,156 @@ def book_tee_time():
         except Exception as e:
             app.logger.warning("email.notification_error request_id=%s error=%s", request_id, e)
 
+    return jsonify(result)
+
+
+@app.route("/api/request-courses", methods=["POST"])
+def request_courses():
+    """Fetch the list of available courses for a given date + course type from
+    the Requests page. Used to populate the course-preference picker."""
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    data = request.get_json() or {}
+    play_date = (data.get("play_date") or "").strip()
+    course_type = (data.get("course_type") or "Championship").strip()
+    any_course = bool(data.get("any_course") or False)
+    if not play_date:
+        return jsonify({"success": False, "error": "Play date is required."}), 400
+    if course_type not in ("Championship", "Executive"):
+        return jsonify({"success": False, "error": "Invalid course type."}), 400
+
+    result = get_worker().call(
+        "fetch_request_courses",
+        request_id=request_id,
+        action="request_courses",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+        play_date=play_date,
+        course_type=course_type,
+        any_course=any_course,
+    )
+    return jsonify(result)
+
+
+@app.route("/api/submit-request", methods=["POST"])
+def submit_request_route():
+    """Submit a tee-time request."""
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    data = request.get_json() or {}
+    play_date = (data.get("play_date") or "").strip()
+    course_type = (data.get("course_type") or "").strip()
+    preference = (data.get("preference") or "").strip()
+    course_choices = data.get("course_choices") or []
+    golfer_ids = data.get("golfer_ids") or []
+    try:
+        max_golfers = int(data.get("max_golfers") or 0)
+    except (TypeError, ValueError):
+        max_golfers = 0
+
+    if not play_date:
+        return jsonify({"success": False, "error": "Play date is required."}), 400
+    if max_golfers < 1 or max_golfers > 4:
+        return jsonify({"success": False, "error": "Max golfers must be between 1 and 4."}), 400
+    if course_type not in ("Championship", "Executive"):
+        return jsonify({"success": False, "error": "Invalid course type."}), 400
+    if preference not in ("Course", "Time"):
+        return jsonify({"success": False, "error": "Preference must be Course or Time."}), 400
+    if not isinstance(course_choices, list) or not course_choices:
+        return jsonify({"success": False, "error": "At least one course must be selected."}), 400
+    if not isinstance(golfer_ids, list) or not golfer_ids:
+        return jsonify({"success": False, "error": "At least one golfer is required."}), 400
+
+    result = get_worker().call(
+        "submit_request",
+        request_id=request_id,
+        action="submit_request",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+        play_date=play_date,
+        max_golfers=max_golfers,
+        has_guests=bool(data.get("has_guests") or False),
+        course_type=course_type,
+        any_course=bool(data.get("any_course") or False),
+        time_to_play=(data.get("time_to_play") or "").strip(),
+        earliest_time=(data.get("earliest_time") or "").strip(),
+        latest_time=(data.get("latest_time") or "").strip(),
+        preference=preference,
+        course_choices=[str(c).strip() for c in course_choices if str(c).strip()],
+        golfer_ids=[str(g).strip() for g in golfer_ids if str(g).strip()],
+    )
+    return jsonify(result)
+
+
+@app.route("/api/my-requests", methods=["GET"])
+def my_requests_route():
+    """List the user's pending tee-time requests."""
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    result = get_worker().call(
+        "view_my_requests",
+        request_id=request_id,
+        action="my_requests",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+    )
+    return jsonify(result)
+
+
+@app.route("/api/delete-request", methods=["POST"])
+def delete_request_route():
+    """Cancel a pending tee-time request."""
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+
+    user = _get_session_user()
+    username = session.get("username")
+    if not user or not username:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+
+    data = request.get_json() or {}
+    rid = (data.get("request_id") or "").strip()
+    if not rid:
+        return jsonify({"success": False, "error": "Request ID is required."}), 400
+
+    result = get_worker().call(
+        "delete_request",
+        request_id=request_id,
+        action="delete_request",
+        tvn_username=username,
+        tvn_password=user["tvn_password"],
+        golf_password=user["golf_password"],
+        target_request_id=rid,
+    )
     return jsonify(result)
 
 
