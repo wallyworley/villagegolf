@@ -773,19 +773,29 @@ def book_tee_time():
         bool(result.get("success")),
     )
 
-    # Send confirmation emails on success
+    # Send confirmation emails on success — fire-and-forget on a background
+    # thread so a slow or failing mail call never blocks (or crashes) the
+    # request worker. The booking is already committed at this point.
     if result.get("success"):
         app.logger.info(
             "email.trigger request_id=%s golfer_ids=%s",
             request_id, data_golfer_ids,
         )
-        try:
-            _send_booking_emails(
-                data_date_label, data_golfer_ids, result,
-                course_name, request_id, booking_username=username,
-            )
-        except Exception as e:
-            app.logger.warning("email.notification_error request_id=%s error=%s", request_id, e)
+
+        def _email_task():
+            try:
+                _send_booking_emails(
+                    data_date_label, data_golfer_ids, result,
+                    course_name, request_id, booking_username=username,
+                )
+            except Exception as e:
+                app.logger.warning("email.notification_error request_id=%s error=%s", request_id, e)
+
+        threading.Thread(
+            target=_email_task,
+            name=f"email-{request_id}",
+            daemon=True,
+        ).start()
 
     return jsonify(result)
 
