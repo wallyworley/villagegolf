@@ -89,45 +89,28 @@ def _worker_public_error(action):
     )
 
 
-# ── User store (Firestore) ────────────────────────────────────────────────────
-from google.cloud import firestore
-
-_USERS_COLLECTION = os.environ.get("FIRESTORE_USERS_COLLECTION", "users")
-_FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)")
-_db = None
-_db_lock = threading.Lock()
-
-
-def _get_db():
-    global _db
-    with _db_lock:
-        if _db is None:
-            _db = firestore.Client(database=_FIRESTORE_DATABASE)
-    return _db
-
-
-def _users_col():
-    return _get_db().collection(_USERS_COLLECTION)
+# ── User store (SQLite) ─────────────────────────────────────────────────────
+# Self-contained local store — no external cloud dependency. See user_store.py.
+import user_store
 
 
 def _get_user(username):
     if not username:
         return None
-    doc = _users_col().document(username).get()
-    return doc.to_dict() if doc.exists else None
+    return user_store.get_user(username)
 
 
 def _set_user(username, data):
-    _users_col().document(username).set(data)
+    user_store.set_user(username, data)
 
 
 def _delete_user(username):
-    _users_col().document(username).delete()
+    user_store.delete_user(username)
 
 
 def _all_users():
     """Return {username: data} for every registered profile."""
-    return {doc.id: (doc.to_dict() or {}) for doc in _users_col().stream()}
+    return user_store.all_users()
 
 
 # ── Email notifications ──────────────────────────────────────────────────────

@@ -160,69 +160,100 @@ def _initials(name):
 
 
 # ── Main service class ────────────────────────────────────────────────────────
-class GolfService:
-    # Keep one browser/page alive for the active user until an actual failure
-    # or user switch requires a reset.
-    _SESSION_TTL = None
+class _Session:
+    """One logged-in browser session for a single golfer."""
+    __slots__ = ("pw", "browser", "context", "page", "ts",
+                 "golf_home_url", "search_context")
 
     def __init__(self):
-        self._pw          = None
-        self._browser     = None
-        self._context     = None
-        self._page        = None
-        self._session_ts  = 0
-        self._current_user = None  # tvn_username of cached session
-        self._search_context = None
-        self._golf_home_url = None  # stored after login to glf100
+        self.pw = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.ts = 0
+        self.golf_home_url = None   # stored after login to glf100
+        self.search_context = None
 
-    def _close_session(self):
-        """Close any cached browser session."""
-        try:
-            if self._context:
-                self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._pw:
-                self._pw.stop()
-        except Exception:
-            pass
-        self._pw = self._browser = self._context = self._page = None
-        self._session_ts = 0
-        self._current_user = None
-        self._search_context = None
 
-    def _session_is_usable(self):
-        """Return True if the cached Playwright objects still look valid."""
-        if not self._browser or not self._page:
+class GolfService:
+    # Keep a small pool of warm sessions, one per golfer, so concurrent users
+    # don't evict each other and force a full re-login on every request. All
+    # sessions live on the single worker thread (Playwright sync API), so a
+    # dict of browsers on one thread is safe. Least-recently-used is evicted
+    # when the pool is full.
+    _MAX_SESSIONS = int(os.environ.get("MAX_BROWSER_SESSIONS", "4"))
+
+    def __init__(self):
+        from collections import OrderedDict
+        self._sessions = OrderedDict()   # tvn_username -> _Session
+        self._active = None              # the _Session for the in-flight request
+        self._active_user = None
+
+    def _close(self, sess):
+        """Tear down one session's Playwright objects."""
+        if not sess:
+            return
+        for closer in (
+            lambda: sess.context and sess.context.close(),
+            lambda: sess.browser and sess.browser.close(),
+            lambda: sess.pw and sess.pw.stop(),
+        ):
+            try:
+                closer()
+            except Exception:
+                pass
+
+    def _drop_session(self, tvn_username):
+        """Close and forget a user's session."""
+        sess = self._sessions.pop(tvn_username, None)
+        self._close(sess)
+        if self._active_user == tvn_username:
+            self._active = None
+            self._active_user = None
+
+    def _close_active(self):
+        """Drop the session for the request currently being served."""
+        if self._active_user:
+            self._drop_session(self._active_user)
+
+    def _session_usable(self, sess):
+        """Return True if a session's Playwright objects still look valid."""
+        if not sess or not sess.browser or not sess.page:
             return False
         try:
-            if hasattr(self._browser, "is_connected") and not self._browser.is_connected():
+            if hasattr(sess.browser, "is_connected") and not sess.browser.is_connected():
                 return False
-            if hasattr(self._page, "is_closed") and self._page.is_closed():
+            if hasattr(sess.page, "is_closed") and sess.page.is_closed():
                 return False
         except Exception:
             return False
         return True
 
     def _get_or_create_session(self, tvn_username):
-        """Return a (browser, page) reusing the cached session if still valid
-        and belongs to the same user."""
-        if (self._session_is_usable()
-                and self._current_user == tvn_username):
-            return self._browser, self._page
-        # Stale, missing, or different user — start fresh
-        self._close_session()
-        self._pw = sync_playwright().start()
-        self._browser, self._context, self._page = self._launch(self._pw)
-        self._session_ts = _time.time()
-        self._current_user = tvn_username
-        return self._browser, self._page
+        """Return (browser, page) for this user, reusing a warm session when
+        possible. Marks it active for the duration of the request."""
+        sess = self._sessions.get(tvn_username)
+        if sess and self._session_usable(sess):
+            self._sessions.move_to_end(tvn_username)   # mark most-recently-used
+            self._active, self._active_user = sess, tvn_username
+            return sess.browser, sess.page
+
+        # Stale entry — discard before rebuilding.
+        if sess:
+            self._drop_session(tvn_username)
+
+        # Evict least-recently-used sessions until there is room.
+        while len(self._sessions) >= self._MAX_SESSIONS:
+            _, old_sess = self._sessions.popitem(last=False)
+            self._close(old_sess)
+
+        sess = _Session()
+        sess.pw = sync_playwright().start()
+        sess.browser, sess.context, sess.page = self._launch(sess.pw)
+        sess.ts = _time.time()
+        self._sessions[tvn_username] = sess
+        self._active, self._active_user = sess, tvn_username
+        return sess.browser, sess.page
 
     def _launch(self, playwright):
         browser = playwright.chromium.launch(
@@ -260,8 +291,8 @@ class GolfService:
         page.locator("input:visible").first.fill(golf_password)
         page.locator('input[value="Continue"]').click()
         page.wait_for_url("**/glf100**", timeout=12000)
-        self._golf_home_url = page.url
-        self._session_ts = _time.time()
+        self._active.golf_home_url = page.url
+        self._active.ts = _time.time()
 
     def _ensure_logged_in(self, page, tvn_username, tvn_password, golf_password):
         url = (page.url or "").lower()
@@ -269,7 +300,7 @@ class GolfService:
         # If we are already exactly on the main menu, we can assume session is okay.
         # If it timed out server-side, a subsequent click will fail, but usually it's fine.
         if "glf100" in url or "glf105" in url:
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return
             
         # Try to click the native "Go Back to Menu" form button if we are on a subpage.
@@ -281,7 +312,7 @@ class GolfService:
                 page.wait_for_load_state("networkidle")
                 new_url = page.url.lower()
                 if "glf100" in new_url or "glf105" in new_url:
-                    self._session_ts = _time.time()
+                    self._active.ts = _time.time()
                     return
         except Exception:
             pass
@@ -415,7 +446,7 @@ class GolfService:
 
         page.locator('input[value="Submit"]').first.click()
         page.wait_for_url("**/glf109e**", timeout=15000)
-        self._session_ts = _time.time()
+        self._active.ts = _time.time()
 
     def _extract_times(self, page, time_filter=None, region_filter=None):
         raw_times = page.evaluate("""() => {
@@ -501,14 +532,14 @@ class GolfService:
             return {"success": True, "primary": primary, "buddies": buddies}
 
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("fetch_buddy_list failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not connect to the golf system. Please try again."}
 
     def get_available_times(self, tvn_username, tvn_password, golf_password,
@@ -519,7 +550,7 @@ class GolfService:
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._setup_reservation(page, num_golfers, has_guests, course_type, golfer_ids, date_str)
             times = self._extract_times(page, time_filter, region_filter)
-            self._search_context = {
+            self._active.search_context = {
                 "user": tvn_username,
                 "date_str": str(date_str or "").strip(),
                 "course_type": str(course_type or "").strip(),
@@ -528,17 +559,17 @@ class GolfService:
                 "num_golfers": int(num_golfers),
                 "has_guests": bool(has_guests),
             }
-            self._session_ts = _time.time()  # refresh TTL
+            self._active.ts = _time.time()  # refresh TTL
             return {"success": True, "times": times, "date_label": date_label}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("get_available_times failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not fetch tee times right now. Please try again."}
 
     def view_my_tee_times(self, tvn_username, tvn_password, golf_password):
@@ -548,17 +579,17 @@ class GolfService:
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_glf109a(page)
             reservations = self._extract_reservations(page)
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "reservations": reservations}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("view_my_tee_times failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not load your tee times right now. Please try again."}
 
     def delete_reservation(self, tvn_username, tvn_password, golf_password, reservation_no):
@@ -691,13 +722,13 @@ class GolfService:
             if still_exists:
                 return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
 
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "reservation_no": str(reservation_no), "reservations": remaining}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception(
@@ -705,20 +736,20 @@ class GolfService:
                 tvn_username,
                 reservation_no,
             )
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not delete that reservation right now. Please try again."}
 
     def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str):
         try:
-            page = self._page
-            ctx = self._search_context or {}
-
             # Booking must reuse the exact session built by get_available_times().
-            # Do not silently rebuild with defaults; require user to refetch if stale.
-            if page is None:
+            # Look it up by user so another golfer's request can't clobber it.
+            sess = self._sessions.get(tvn_username)
+            if not sess or not self._session_usable(sess):
                 return {"success": False, "error": "Session expired. Please fetch tee times again."}
-            if self._current_user != tvn_username:
-                return {"success": False, "error": "Selected golfer changed. Please fetch tee times again."}
+            self._active, self._active_user = sess, tvn_username
+            page = sess.page
+            ctx = sess.search_context or {}
+
             if ctx.get("user") != tvn_username:
                 return {"success": False, "error": "Search context changed. Please fetch tee times again."}
             if "glf109e" not in (page.url or "").lower():
@@ -742,7 +773,7 @@ class GolfService:
                         break
 
             if not clicked:
-                self._close_session()
+                self._close_active()
                 return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
 
             # Allocate golfers on glf109y and find the row number
@@ -761,7 +792,7 @@ class GolfService:
                     break
 
             if alloc_row_num is None:
-                self._close_session()
+                self._close_active()
                 return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
 
             # Replicate the redirect() function's submit logic
@@ -791,10 +822,10 @@ class GolfService:
             }
 
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception(
@@ -803,7 +834,7 @@ class GolfService:
                 course_name,
                 time_str,
             )
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Booking failed. Please try again."}
 
     # ── Requests (Requests and Templates feature) ─────────────────────────────
@@ -1018,17 +1049,17 @@ class GolfService:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "courses": courses}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("fetch_request_courses failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not load course list. Please try again."}
 
     def submit_request(self, tvn_username, tvn_password, golf_password,
@@ -1056,7 +1087,7 @@ class GolfService:
             self._select_request_courses(page, course_choices)
             self._fill_request_golfers(page, golfer_ids)
             request_no = self._extract_request_confirmation(page)
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             if not request_no:
                 return {"success": False, "error": "Request submitted but no confirmation number was returned."}
             return {
@@ -1065,14 +1096,14 @@ class GolfService:
                 "message": f"Request #{request_no} submitted",
             }
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("submit_request failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not submit request. Please try again."}
 
     def view_my_requests(self, tvn_username, tvn_password, golf_password):
@@ -1129,17 +1160,17 @@ class GolfService:
                     "date": date,
                 })
 
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "requests": requests_out}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("view_my_requests failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not load your requests. Please try again."}
 
     def delete_request(self, tvn_username, tvn_password, golf_password, target_request_id):
@@ -1175,15 +1206,15 @@ class GolfService:
             except Exception:
                 pass
 
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "message": f"Request {target} canceled"}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("delete_request failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not cancel that request. Please try again."}

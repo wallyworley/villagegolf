@@ -3,4 +3,6 @@ playwright==1.44.0
 gunicorn==22.0.0
 python-dotenv==1.0.1
 certifi==2024.8.30
-google-cloud-firestore==2.19.0
+# User profiles are stored in SQLite (stdlib `sqlite3`) — no external store.
+# google-cloud-firestore is no longer a runtime dependency; it is only needed
+# to run migrate_firestore_to_sqlite.py once during the cutover.
