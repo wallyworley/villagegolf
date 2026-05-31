@@ -3,7 +3,9 @@ playwright==1.44.0
 gunicorn==22.0.0
 python-dotenv==1.0.1
 certifi==2024.8.30
+cryptography==43.0.1
 # User profiles are stored in SQLite (stdlib `sqlite3`) — no external store.
+# cryptography encrypts the user blob at rest when USER_DB_ENCRYPTION_KEY is set.
 # google-cloud-firestore is no longer a runtime dependency; it is only needed
 # to run migrate_firestore_to_sqlite.py once during the cutover.
 #

@@ -4,6 +4,7 @@ Serves the frontend and provides API endpoints for
 fetching tee times and booking via The Villages system.
 """
 
+import hmac
 import logging
 import os
 import queue
@@ -24,10 +25,22 @@ app = Flask(__name__, template_folder="templates")
 app.logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# SECRET_KEY signs session cookies. In production it MUST be set and stable —
+# a random per-boot value logs every device out on each restart. Fail hard if
+# it is missing, unless ALLOW_EPHEMERAL_SECRET_KEY=1 is set (local dev only).
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
-    logging.warning("SECRET_KEY not set — sessions will not survive restarts")
-    SECRET_KEY = os.urandom(24).hex()
+    if os.environ.get("ALLOW_EPHEMERAL_SECRET_KEY") == "1":
+        logging.warning(
+            "SECRET_KEY not set — using an ephemeral key (dev only). "
+            "Sessions will not survive a restart."
+        )
+        SECRET_KEY = os.urandom(24).hex()
+    else:
+        raise RuntimeError(
+            "SECRET_KEY is not set. Set a stable SECRET_KEY in the environment "
+            "(see DEPLOY/.env), or set ALLOW_EPHEMERAL_SECRET_KEY=1 for local dev."
+        )
 app.secret_key = SECRET_KEY
 
 app.config.update(
@@ -242,6 +255,13 @@ def _set_authenticated_user(username):
     session.permanent = True
 
 
+def _const_eq(stored, supplied):
+    """Constant-time string comparison to avoid login timing side-channels."""
+    if stored is None or supplied is None:
+        return False
+    return hmac.compare_digest(str(stored), str(supplied))
+
+
 def _parse_booking_inputs(data, require_course_time=False):
     """Validate and normalize booking/search payload from frontend."""
     date_str = (data.get("date") or "").strip()
@@ -400,8 +420,8 @@ def login_user():
         user is not None
         and password
         and golf_pin
-        and user.get("tvn_password") == password
-        and user.get("golf_password") == golf_pin
+        and _const_eq(user.get("tvn_password"), password)
+        and _const_eq(user.get("golf_password"), golf_pin)
     )
     if credentials_ok:
         _set_authenticated_user(username)
