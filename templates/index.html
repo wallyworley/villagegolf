@@ -89,7 +89,15 @@
 
     .sec { background:var(--card); border-radius:var(--r); padding:18px 18px 20px;
            margin-bottom:13px; box-shadow:var(--shadow); transition:opacity .3s; }
-    .sec.dim { opacity:.38; pointer-events:none; }
+    /* Locked sections are softly dimmed (not so faint they look broken) and
+       show a small lock hint so the progressive flow is self-explanatory. */
+    .sec.dim { opacity:.6; pointer-events:none; }
+    .sec.dim .sec-icon { filter:grayscale(1); }
+    .sec-hdr .lock-hint { display:none; margin-left:auto; align-self:center;
+                          font-size:10px; font-weight:700; color:var(--muted);
+                          background:var(--gl); border:1px solid var(--gb);
+                          border-radius:20px; padding:3px 9px; white-space:nowrap; }
+    .sec.dim .sec-hdr .lock-hint { display:inline-block; }
     .app-nav { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:13px; }
     .app-tab { border:none; border-radius:14px; padding:13px 12px; font-size:14px; font-weight:800;
                background:#e7efe7; color:var(--muted); cursor:pointer; transition:.18s; }
@@ -149,6 +157,21 @@
     .tile-ico { font-size:24px; margin-bottom:5px; }
     .tile-lbl { font-size:13px; font-weight:700; }
     .tile-sub { font-size:11px; color:var(--muted); margin-top:2px; }
+    /* Region pills: single-word labels, vertically centered, no wrap. */
+    .region-row .tile { padding:13px 6px; display:flex; align-items:center; justify-content:center; min-height:46px; }
+    .region-row .tile-lbl { white-space:nowrap; }
+
+    /* Shared form field label (Requests tab) — replaces repeated inline styles. */
+    .field { margin-bottom:14px; }
+    .field-label { font-size:12px; font-weight:700; color:var(--muted);
+                   text-transform:uppercase; letter-spacing:.5px;
+                   display:block; margin-bottom:6px; }
+    .field-input { width:100%; padding:11px 12px; border:2px solid #dde8dd;
+                   border-radius:10px; font-size:15px; outline:none;
+                   background:var(--card); color:var(--text); transition:.2s; }
+    .field-input:focus { border-color:var(--g3); }
+    .group-sub { font-size:11px; font-weight:700; text-transform:uppercase;
+                 letter-spacing:.5px; color:var(--muted); margin:0 0 8px; }
 
     .tog-row { display:flex; align-items:center; justify-content:space-between; }
     .tog-lbl { font-size:14px; font-weight:600; }
@@ -162,10 +185,16 @@
     .sw input:checked + .sw-track::before { transform:translateX(22px); }
 
     .time-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
-    .time-grid.five { grid-template-columns:repeat(3,1fr); }
-    .time-grid.five .t-tile:last-child { grid-column: 2; }
+    /* "Any Time" spans the full width as a header option; the four ranges
+       sit below in a balanced 2x2 grid (no lopsided orphan tile). */
+    .time-grid.five .t-tile.t-wide { grid-column: 1 / -1; }
     .t-tile { border:2px solid #e4eae4; border-radius:13px; padding:13px 9px;
-              text-align:center; cursor:pointer; transition:all .18s; user-select:none; }
+              text-align:center; cursor:pointer; transition:all .18s; user-select:none;
+              min-height:78px; display:flex; flex-direction:column;
+              align-items:center; justify-content:center; }
+    .t-tile.t-wide { min-height:0; flex-direction:row; gap:7px; padding:11px 9px; }
+    .t-tile.t-wide .t-ico { margin-bottom:0; }
+    .t-tile.t-wide .t-range { margin-top:0; }
     .t-tile:active { transform:scale(.97); }
     .t-tile.on { border-color:var(--g3); background:var(--gl); }
     .t-ico   { font-size:20px; display:block; margin-bottom:3px; }
@@ -380,6 +409,7 @@
   <div class="sec dim" id="sec-golfers">
     <div class="sec-hdr"><div class="sec-icon">&#127948;&#65039;</div>
       <div><div class="sec-title">Golfers</div><div class="sec-sub">Select everyone in your group</div></div>
+      <span class="lock-hint">&#128274; Pick a date first</span>
     </div>
     <div class="g-list" id="golferList"></div>
     <div class="add-buddy-row" id="addBuddyRow">
@@ -392,6 +422,7 @@
   <div class="sec dim" id="sec-course">
     <div class="sec-hdr"><div class="sec-icon">&#127942;</div>
       <div><div class="sec-title">Course &amp; Guests</div><div class="sec-sub">Course type and guest info</div></div>
+      <span class="lock-hint">&#128274; Add golfers first</span>
     </div>
     <div class="two" style="margin-bottom:14px;">
       <div class="tile" id="t-exec" onclick="setCourse('Executive')">
@@ -402,18 +433,18 @@
       </div>
     </div>
     <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Region</div>
-    <div class="four" style="margin-bottom:14px;">
+    <div class="four region-row" style="margin-bottom:14px;">
       <div class="tile on" id="r-all" onclick="setRegion('all')">
-        <div class="tile-lbl">All</div><div class="tile-sub">Any area</div>
+        <div class="tile-lbl">All</div>
       </div>
       <div class="tile" id="r-north" onclick="setRegion('north')">
-        <div class="tile-lbl">North</div><div class="tile-sub">North side</div>
+        <div class="tile-lbl">North</div>
       </div>
       <div class="tile" id="r-central" onclick="setRegion('central')">
-        <div class="tile-lbl">Central</div><div class="tile-sub">Middle area</div>
+        <div class="tile-lbl">Central</div>
       </div>
       <div class="tile" id="r-south" onclick="setRegion('south')">
-        <div class="tile-lbl">South</div><div class="tile-sub">South side</div>
+        <div class="tile-lbl">South</div>
       </div>
     </div>
     <div class="tog-row">
@@ -425,12 +456,13 @@
   <div class="sec dim" id="sec-time">
     <div class="sec-hdr"><div class="sec-icon">&#9200;</div>
       <div><div class="sec-title">Time Preference</div><div class="sec-sub">When would you like to tee off?</div></div>
+      <span class="lock-hint">&#128274; Choose a course first</span>
     </div>
     <div class="time-grid five">
-      <div class="t-tile" data-filter="all" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">Show all</div></div>
+      <div class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">&#183; Show all</div></div>
       <div class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
       <div class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
-      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Early Afternoon</div><div class="t-range">Noon &#8211; 2pm</div></div>
+      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Midday</div><div class="t-range">Noon &#8211; 2pm</div></div>
       <div class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
     </div>
   </div>
@@ -572,13 +604,17 @@
         </div>
       </div>
 
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Golfers (up to 4)</label>
-        <div class="g-list" id="rq-golfer-list"></div>
-      </div>
+    </div>
 
-      <div class="err-banner" id="rq-err"></div>
-      <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()">Submit Request</button>
+    <!-- Card 3: Golfers & submit -->
+    <div class="sec" style="margin-top:14px;">
+      <div class="sec-hdr"><div class="sec-icon">&#127948;&#65039;</div>
+        <div><div class="sec-title">Golfers</div><div class="sec-sub">Up to 4 players in this request</div></div>
+      </div>
+      <div class="g-list" id="rq-golfer-list"></div>
+
+      <div class="err-banner" id="rq-err" style="margin-top:14px;"></div>
+      <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()" style="margin-top:14px;">Submit Request</button>
       <div class="contact-status" id="rq-status" style="margin-top:10px;"></div>
     </div>
 
