@@ -366,6 +366,7 @@
   <div class="app-nav">
     <button class="app-tab active" id="tab-book" onclick="showAppView('book')">Book Tee Time</button>
     <button class="app-tab" id="tab-mytimes" onclick="showAppView('mytimes')">My Tee Times</button>
+    <button class="app-tab" id="tab-request" onclick="showAppView('request')">Requests</button>
   </div>
 
   <div class="app-view active" id="view-book">
@@ -485,6 +486,112 @@
   </div>
   </div>
 
+  <div class="app-view" id="view-request">
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon">&#128221;</div>
+        <div><div class="sec-title">New Tee Time Request</div><div class="sec-sub">Submit a request with your preferences</div></div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Play Date</label>
+        <input id="rq-date" type="date" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;font-size:15px;"/>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Maximum Number of Golfers</label>
+        <div class="four">
+          <div class="tile" id="rq-max-1" onclick="setRequestMax(1)"><div class="tile-lbl">1</div></div>
+          <div class="tile" id="rq-max-2" onclick="setRequestMax(2)"><div class="tile-lbl">2</div></div>
+          <div class="tile" id="rq-max-3" onclick="setRequestMax(3)"><div class="tile-lbl">3</div></div>
+          <div class="tile" id="rq-max-4" onclick="setRequestMax(4)"><div class="tile-lbl">4</div></div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Type</label>
+        <div class="two">
+          <div class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><div class="tile-ico">&#128994;</div><div class="tile-lbl">Executive</div></div>
+          <div class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><div class="tile-ico">&#127942;</div><div class="tile-lbl">Championship</div></div>
+        </div>
+      </div>
+
+      <div class="tog-row" style="margin-bottom:10px;">
+        <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
+        <label class="sw"><input type="checkbox" id="rq-guests"/><span class="sw-track"></span></label>
+      </div>
+
+      <div class="tog-row" style="margin-bottom:14px;">
+        <div class="tog-lbl">Any course?<small>Open to any course of the chosen type</small></div>
+        <label class="sw"><input type="checkbox" id="rq-anycourse"/><span class="sw-track"></span></label>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Time to Play</label>
+          <input id="rq-time" type="text" placeholder="12:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Earliest</label>
+          <input id="rq-earliest" type="text" placeholder="9:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Latest</label>
+          <input id="rq-latest" type="text" placeholder="1:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preference</label>
+        <div class="two">
+          <div class="tile on" id="rq-pref-course" onclick="setRequestPref('Course')"><div class="tile-lbl">Course</div></div>
+          <div class="tile" id="rq-pref-time" onclick="setRequestPref('Time')"><div class="tile-lbl">Time</div></div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Choices (in preference order)</label>
+        <button class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()" style="margin-bottom:8px;">Load courses for selected date / type</button>
+        <div id="rq-course-status" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
+        <div id="rq-course-picker" style="display:none;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Available</div>
+              <select id="rq-available" multiple size="10" style="width:100%;padding:6px;border:1px solid #d4d8df;border-radius:8px;"></select>
+              <button class="add-buddy-btn" onclick="rqAddCourse()" style="margin-top:6px;width:100%;">Add &#8594;</button>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Selected (in order)</div>
+              <select id="rq-selected" multiple size="10" style="width:100%;padding:6px;border:1px solid #d4d8df;border-radius:8px;"></select>
+              <div style="display:flex;gap:6px;margin-top:6px;">
+                <button class="add-buddy-btn" onclick="rqMoveCourse(-1)" style="flex:1;">&#8593; Up</button>
+                <button class="add-buddy-btn" onclick="rqMoveCourse(1)" style="flex:1;">&#8595; Down</button>
+                <button class="add-buddy-btn" onclick="rqRemoveCourse()" style="flex:1;">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Golfers (up to 4)</label>
+        <div class="g-list" id="rq-golfer-list"></div>
+      </div>
+
+      <div class="err-banner" id="rq-err"></div>
+      <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()">Submit Request</button>
+      <div class="contact-status" id="rq-status" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="sec" style="margin-top:18px;">
+      <div class="sec-hdr"><div class="sec-icon">&#128203;</div>
+        <div><div class="sec-title">My Open Requests</div><div class="sec-sub">Pending tee-time requests</div></div>
+      </div>
+      <button class="mytimes-btn" onclick="loadMyRequests()">Refresh My Requests</button>
+      <div class="mytimes-status" id="rq-list-status"></div>
+      <div class="mytimes-list" id="rq-list"></div>
+    </div>
+  </div>
+
   <div class="switch-user" onclick="switchUser()">&#8592; Switch Golfer</div>
 
 </div>
@@ -523,6 +630,7 @@ let BUDDIES = [];  // populated from server after login
 const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
 let MY_TEE_TIMES = [];
 let DELETE_PENDING = null;
+const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],selectedCourses:[],golfers:[] };
 
 // ── Init: restore session on page load ──
 (async function init(){
@@ -656,11 +764,16 @@ function resetMyTeeTimes(){
 }
 
 function showAppView(view){
-  const isMyTimes=view==='mytimes';
-  document.getElementById('view-book').classList.toggle('active', !isMyTimes);
+  const isBook = view==='book';
+  const isMyTimes = view==='mytimes';
+  const isRequest = view==='request';
+  document.getElementById('view-book').classList.toggle('active', isBook);
   document.getElementById('view-mytimes').classList.toggle('active', isMyTimes);
-  document.getElementById('tab-book').classList.toggle('active', !isMyTimes);
+  document.getElementById('view-request').classList.toggle('active', isRequest);
+  document.getElementById('tab-book').classList.toggle('active', isBook);
   document.getElementById('tab-mytimes').classList.toggle('active', isMyTimes);
+  document.getElementById('tab-request').classList.toggle('active', isRequest);
+  if(isRequest){ buildRequestGolferList(); }
 }
 
 function setMyTimesStatus(message, tone='muted'){
@@ -975,6 +1088,201 @@ function resetApp(){
   document.getElementById('loaderSec').style.display='none';
   document.getElementById('fetchBtn').disabled=true;
   showError(''); window.scrollTo({top:0,behavior:'smooth'});
+}
+
+// ── Requests feature ──
+function setRequestMax(n){
+  SR.maxGolfers = n;
+  for(let i=1;i<=4;i++){
+    document.getElementById('rq-max-'+i).classList.toggle('on', i===n);
+  }
+  buildRequestGolferList();
+}
+function setRequestCourse(c){
+  SR.course = c;
+  document.getElementById('rq-exec').classList.toggle('on', c==='Executive');
+  document.getElementById('rq-champ').classList.toggle('on', c==='Championship');
+}
+function setRequestPref(p){
+  SR.preference = p;
+  document.getElementById('rq-pref-course').classList.toggle('on', p==='Course');
+  document.getElementById('rq-pref-time').classList.toggle('on', p==='Time');
+}
+function rqFormatDateForApi(){
+  const v=document.getElementById('rq-date').value;  // "YYYY-MM-DD"
+  if(!v) return '';
+  const [y,m,d]=v.split('-');
+  return `${parseInt(m,10)}/${d.padStart(2,'0')}/${y}`;
+}
+function rqDayName(){
+  const v=document.getElementById('rq-date').value;
+  if(!v) return '';
+  const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dt=new Date(v+'T00:00:00');
+  return days[dt.getDay()];
+}
+function buildRequestGolferList(){
+  const list=document.getElementById('rq-golfer-list');
+  if(!list) return;
+  if(!BUDDIES || BUDDIES.length===0){
+    list.innerHTML='<div class="mytimes-empty">No golfers loaded.</div>';
+    return;
+  }
+  list.innerHTML=BUDDIES.map(b=>{
+    const sel=SR.golfers.includes(b.id);
+    return `<div class="g-card${sel?' on':''}" onclick="toggleRequestGolfer('${esc(b.id)}')">
+      <div class="g-avatar">${esc(b.initials||'?')}</div>
+      <div class="g-info"><div class="g-name">${esc(b.name||'Golfer')}</div><div class="g-id">ID ${esc(b.id)}</div></div>
+      <div class="g-check">${sel?'✓':''}</div>
+    </div>`;
+  }).join('');
+}
+function toggleRequestGolfer(id){
+  const cap = SR.maxGolfers || 4;
+  const i=SR.golfers.indexOf(id);
+  if(i>=0){ SR.golfers.splice(i,1); }
+  else if(SR.golfers.length < cap){ SR.golfers.push(id); }
+  buildRequestGolferList();
+}
+async function loadRequestCourses(){
+  const status=document.getElementById('rq-course-status');
+  const picker=document.getElementById('rq-course-picker');
+  const play_date=rqFormatDateForApi();
+  if(!play_date){ status.textContent='Pick a date first.'; status.style.color='#c0392b'; return; }
+  if(!SR.course){ status.textContent='Pick a course type first.'; status.style.color='#c0392b'; return; }
+  status.textContent='Loading courses…'; status.style.color='var(--muted)';
+  try{
+    const r=await fetch('/api/request-courses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({play_date,course_type:SR.course,any_course:SR.anyCourse})});
+    const d=await r.json();
+    if(d.success){
+      SR.availableCourses=d.courses||[];
+      SR.selectedCourses=[];
+      const avail=document.getElementById('rq-available');
+      avail.innerHTML=SR.availableCourses.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      document.getElementById('rq-selected').innerHTML='';
+      picker.style.display='block';
+      status.textContent=`Loaded ${SR.availableCourses.length} courses.`; status.style.color='var(--g2)';
+    } else {
+      status.textContent=d.error||'Could not load courses.'; status.style.color='#c0392b';
+    }
+  } catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+}
+function rqAddCourse(){
+  const avail=document.getElementById('rq-available');
+  const sel=document.getElementById('rq-selected');
+  const opts=Array.from(avail.selectedOptions);
+  for(const o of opts){
+    if(SR.selectedCourses.includes(o.value)) continue;
+    SR.selectedCourses.push(o.value);
+    const newOpt=document.createElement('option');
+    newOpt.value=o.value; newOpt.text=o.value;
+    sel.appendChild(newOpt);
+  }
+  for(const o of opts){ o.selected=false; }
+}
+function rqRemoveCourse(){
+  const sel=document.getElementById('rq-selected');
+  const opts=Array.from(sel.selectedOptions);
+  for(const o of opts){
+    SR.selectedCourses = SR.selectedCourses.filter(c=>c!==o.value);
+    sel.removeChild(o);
+  }
+}
+function rqMoveCourse(direction){
+  const sel=document.getElementById('rq-selected');
+  const opt=sel.selectedOptions[0];
+  if(!opt) return;
+  const idx=Array.from(sel.options).indexOf(opt);
+  const newIdx=idx+direction;
+  if(newIdx<0 || newIdx>=sel.options.length) return;
+  if(direction<0){ sel.insertBefore(opt, sel.options[newIdx]); }
+  else { sel.insertBefore(opt, sel.options[newIdx].nextSibling); }
+  opt.selected=true;
+  SR.selectedCourses = Array.from(sel.options).map(o=>o.value);
+}
+async function submitRequest(){
+  const err=document.getElementById('rq-err');
+  const status=document.getElementById('rq-status');
+  const btn=document.getElementById('rq-submit-btn');
+  err.textContent=''; err.classList.remove('show');
+  status.textContent='';
+  const play_date=rqFormatDateForApi();
+  SR.guests=document.getElementById('rq-guests').checked;
+  SR.anyCourse=document.getElementById('rq-anycourse').checked;
+  SR.timeToPlay=document.getElementById('rq-time').value.trim();
+  SR.earliest=document.getElementById('rq-earliest').value.trim();
+  SR.latest=document.getElementById('rq-latest').value.trim();
+  if(!play_date){ err.textContent='⚠️ Pick a play date.'; err.classList.add('show'); return; }
+  if(!SR.maxGolfers){ err.textContent='⚠️ Pick max number of golfers.'; err.classList.add('show'); return; }
+  if(!SR.course){ err.textContent='⚠️ Pick a course type.'; err.classList.add('show'); return; }
+  if(SR.selectedCourses.length===0){ err.textContent='⚠️ Add at least one course choice.'; err.classList.add('show'); return; }
+  if(SR.golfers.length===0){ err.textContent='⚠️ Pick at least one golfer.'; err.classList.add('show'); return; }
+  btn.disabled=true; status.textContent='Submitting request…'; status.style.color='var(--muted)';
+  try{
+    const payload={
+      play_date,
+      max_golfers: SR.maxGolfers,
+      has_guests: SR.guests,
+      course_type: SR.course,
+      any_course: SR.anyCourse,
+      time_to_play: SR.timeToPlay,
+      earliest_time: SR.earliest,
+      latest_time: SR.latest,
+      preference: SR.preference,
+      course_choices: SR.selectedCourses,
+      golfer_ids: SR.golfers,
+    };
+    const r=await fetch('/api/submit-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await r.json();
+    if(d.success){
+      status.textContent='✅ '+(d.message||('Request #'+(d.request_no||'submitted')));
+      status.style.color='var(--g2)';
+      loadMyRequests();
+    } else {
+      status.textContent=d.error||'Submission failed.'; status.style.color='#c0392b';
+    }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+  finally{ btn.disabled=false; }
+}
+async function loadMyRequests(){
+  const status=document.getElementById('rq-list-status');
+  const list=document.getElementById('rq-list');
+  status.textContent='Loading…'; status.style.color='var(--muted)';
+  list.innerHTML='';
+  try{
+    const r=await fetch('/api/my-requests');
+    const d=await r.json();
+    if(d.success){
+      const items=d.requests||[];
+      if(items.length===0){
+        list.innerHTML='<div class="mytimes-empty">No open requests.</div>';
+        status.textContent=''; return;
+      }
+      list.innerHTML=items.map(it=>{
+        const rid=esc(it.request_id||'');
+        return `<div class="mytimes-card">
+          <div class="mytimes-top"><div class="mytimes-course">${esc(it.name||'Request')}</div><div class="mytimes-time">${esc(it.date||'')}</div></div>
+          <div class="mytimes-meta">${esc(it.action||'')}</div>
+          <div class="mytimes-meta">Request #${rid}</div>
+          <div class="mytimes-btn-row"><button class="mytimes-action-btn delete" onclick="deleteRequest('${rid}')">Cancel Request</button></div>
+        </div>`;
+      }).join('');
+      status.textContent='';
+    } else {
+      status.textContent=d.error||'Could not load.'; status.style.color='#c0392b';
+    }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+}
+async function deleteRequest(rid){
+  if(!confirm(`Cancel request #${rid}?`)) return;
+  const status=document.getElementById('rq-list-status');
+  status.textContent='Cancelling…'; status.style.color='var(--muted)';
+  try{
+    const r=await fetch('/api/delete-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:rid})});
+    const d=await r.json();
+    if(d.success){ status.textContent='Cancelled.'; status.style.color='var(--g2)'; loadMyRequests(); }
+    else { status.textContent=d.error||'Cancel failed.'; status.style.color='#c0392b'; }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
 }
 </script>
 </body>

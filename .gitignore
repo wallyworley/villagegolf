@@ -5,6 +5,14 @@
 cookies.txt
 users.json
 
+# Local SQLite user store (contains credentials — never commit)
+users.db
+users.db-wal
+users.db-shm
+
+# Salesforce scratch config (not part of this app)
+.sfdx/
+
 # Python
 __pycache__/
 *.pyc

@@ -160,69 +160,100 @@ def _initials(name):
 
 
 # ── Main service class ────────────────────────────────────────────────────────
-class GolfService:
-    # Keep one browser/page alive for the active user until an actual failure
-    # or user switch requires a reset.
-    _SESSION_TTL = None
+class _Session:
+    """One logged-in browser session for a single golfer."""
+    __slots__ = ("pw", "browser", "context", "page", "ts",
+                 "golf_home_url", "search_context")
 
     def __init__(self):
-        self._pw          = None
-        self._browser     = None
-        self._context     = None
-        self._page        = None
-        self._session_ts  = 0
-        self._current_user = None  # tvn_username of cached session
-        self._search_context = None
-        self._golf_home_url = None  # stored after login to glf100
+        self.pw = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.ts = 0
+        self.golf_home_url = None   # stored after login to glf100
+        self.search_context = None
 
-    def _close_session(self):
-        """Close any cached browser session."""
-        try:
-            if self._context:
-                self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._pw:
-                self._pw.stop()
-        except Exception:
-            pass
-        self._pw = self._browser = self._context = self._page = None
-        self._session_ts = 0
-        self._current_user = None
-        self._search_context = None
 
-    def _session_is_usable(self):
-        """Return True if the cached Playwright objects still look valid."""
-        if not self._browser or not self._page:
+class GolfService:
+    # Keep a small pool of warm sessions, one per golfer, so concurrent users
+    # don't evict each other and force a full re-login on every request. All
+    # sessions live on the single worker thread (Playwright sync API), so a
+    # dict of browsers on one thread is safe. Least-recently-used is evicted
+    # when the pool is full.
+    _MAX_SESSIONS = int(os.environ.get("MAX_BROWSER_SESSIONS", "4"))
+
+    def __init__(self):
+        from collections import OrderedDict
+        self._sessions = OrderedDict()   # tvn_username -> _Session
+        self._active = None              # the _Session for the in-flight request
+        self._active_user = None
+
+    def _close(self, sess):
+        """Tear down one session's Playwright objects."""
+        if not sess:
+            return
+        for closer in (
+            lambda: sess.context and sess.context.close(),
+            lambda: sess.browser and sess.browser.close(),
+            lambda: sess.pw and sess.pw.stop(),
+        ):
+            try:
+                closer()
+            except Exception:
+                pass
+
+    def _drop_session(self, tvn_username):
+        """Close and forget a user's session."""
+        sess = self._sessions.pop(tvn_username, None)
+        self._close(sess)
+        if self._active_user == tvn_username:
+            self._active = None
+            self._active_user = None
+
+    def _close_active(self):
+        """Drop the session for the request currently being served."""
+        if self._active_user:
+            self._drop_session(self._active_user)
+
+    def _session_usable(self, sess):
+        """Return True if a session's Playwright objects still look valid."""
+        if not sess or not sess.browser or not sess.page:
             return False
         try:
-            if hasattr(self._browser, "is_connected") and not self._browser.is_connected():
+            if hasattr(sess.browser, "is_connected") and not sess.browser.is_connected():
                 return False
-            if hasattr(self._page, "is_closed") and self._page.is_closed():
+            if hasattr(sess.page, "is_closed") and sess.page.is_closed():
                 return False
         except Exception:
             return False
         return True
 
     def _get_or_create_session(self, tvn_username):
-        """Return a (browser, page) reusing the cached session if still valid
-        and belongs to the same user."""
-        if (self._session_is_usable()
-                and self._current_user == tvn_username):
-            return self._browser, self._page
-        # Stale, missing, or different user — start fresh
-        self._close_session()
-        self._pw = sync_playwright().start()
-        self._browser, self._context, self._page = self._launch(self._pw)
-        self._session_ts = _time.time()
-        self._current_user = tvn_username
-        return self._browser, self._page
+        """Return (browser, page) for this user, reusing a warm session when
+        possible. Marks it active for the duration of the request."""
+        sess = self._sessions.get(tvn_username)
+        if sess and self._session_usable(sess):
+            self._sessions.move_to_end(tvn_username)   # mark most-recently-used
+            self._active, self._active_user = sess, tvn_username
+            return sess.browser, sess.page
+
+        # Stale entry — discard before rebuilding.
+        if sess:
+            self._drop_session(tvn_username)
+
+        # Evict least-recently-used sessions until there is room.
+        while len(self._sessions) >= self._MAX_SESSIONS:
+            _, old_sess = self._sessions.popitem(last=False)
+            self._close(old_sess)
+
+        sess = _Session()
+        sess.pw = sync_playwright().start()
+        sess.browser, sess.context, sess.page = self._launch(sess.pw)
+        sess.ts = _time.time()
+        self._sessions[tvn_username] = sess
+        self._active, self._active_user = sess, tvn_username
+        return sess.browser, sess.page
 
     def _launch(self, playwright):
         browser = playwright.chromium.launch(
@@ -260,8 +291,8 @@ class GolfService:
         page.locator("input:visible").first.fill(golf_password)
         page.locator('input[value="Continue"]').click()
         page.wait_for_url("**/glf100**", timeout=12000)
-        self._golf_home_url = page.url
-        self._session_ts = _time.time()
+        self._active.golf_home_url = page.url
+        self._active.ts = _time.time()
 
     def _ensure_logged_in(self, page, tvn_username, tvn_password, golf_password):
         url = (page.url or "").lower()
@@ -269,7 +300,7 @@ class GolfService:
         # If we are already exactly on the main menu, we can assume session is okay.
         # If it timed out server-side, a subsequent click will fail, but usually it's fine.
         if "glf100" in url or "glf105" in url:
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return
             
         # Try to click the native "Go Back to Menu" form button if we are on a subpage.
@@ -281,7 +312,7 @@ class GolfService:
                 page.wait_for_load_state("networkidle")
                 new_url = page.url.lower()
                 if "glf100" in new_url or "glf105" in new_url:
-                    self._session_ts = _time.time()
+                    self._active.ts = _time.time()
                     return
         except Exception:
             pass
@@ -415,7 +446,7 @@ class GolfService:
 
         page.locator('input[value="Submit"]').first.click()
         page.wait_for_url("**/glf109e**", timeout=15000)
-        self._session_ts = _time.time()
+        self._active.ts = _time.time()
 
     def _extract_times(self, page, time_filter=None, region_filter=None):
         raw_times = page.evaluate("""() => {
@@ -501,14 +532,14 @@ class GolfService:
             return {"success": True, "primary": primary, "buddies": buddies}
 
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("fetch_buddy_list failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not connect to the golf system. Please try again."}
 
     def get_available_times(self, tvn_username, tvn_password, golf_password,
@@ -519,7 +550,7 @@ class GolfService:
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._setup_reservation(page, num_golfers, has_guests, course_type, golfer_ids, date_str)
             times = self._extract_times(page, time_filter, region_filter)
-            self._search_context = {
+            self._active.search_context = {
                 "user": tvn_username,
                 "date_str": str(date_str or "").strip(),
                 "course_type": str(course_type or "").strip(),
@@ -528,17 +559,17 @@ class GolfService:
                 "num_golfers": int(num_golfers),
                 "has_guests": bool(has_guests),
             }
-            self._session_ts = _time.time()  # refresh TTL
+            self._active.ts = _time.time()  # refresh TTL
             return {"success": True, "times": times, "date_label": date_label}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("get_available_times failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not fetch tee times right now. Please try again."}
 
     def view_my_tee_times(self, tvn_username, tvn_password, golf_password):
@@ -548,17 +579,17 @@ class GolfService:
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_glf109a(page)
             reservations = self._extract_reservations(page)
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "reservations": reservations}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("view_my_tee_times failed for user=%s", tvn_username)
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not load your tee times right now. Please try again."}
 
     def delete_reservation(self, tvn_username, tvn_password, golf_password, reservation_no):
@@ -691,13 +722,13 @@ class GolfService:
             if still_exists:
                 return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
 
-            self._session_ts = _time.time()
+            self._active.ts = _time.time()
             return {"success": True, "reservation_no": str(reservation_no), "reservations": remaining}
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception(
@@ -705,20 +736,20 @@ class GolfService:
                 tvn_username,
                 reservation_no,
             )
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Could not delete that reservation right now. Please try again."}
 
     def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str):
         try:
-            page = self._page
-            ctx = self._search_context or {}
-
             # Booking must reuse the exact session built by get_available_times().
-            # Do not silently rebuild with defaults; require user to refetch if stale.
-            if page is None:
+            # Look it up by user so another golfer's request can't clobber it.
+            sess = self._sessions.get(tvn_username)
+            if not sess or not self._session_usable(sess):
                 return {"success": False, "error": "Session expired. Please fetch tee times again."}
-            if self._current_user != tvn_username:
-                return {"success": False, "error": "Selected golfer changed. Please fetch tee times again."}
+            self._active, self._active_user = sess, tvn_username
+            page = sess.page
+            ctx = sess.search_context or {}
+
             if ctx.get("user") != tvn_username:
                 return {"success": False, "error": "Search context changed. Please fetch tee times again."}
             if "glf109e" not in (page.url or "").lower():
@@ -742,7 +773,7 @@ class GolfService:
                         break
 
             if not clicked:
-                self._close_session()
+                self._close_active()
                 return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
 
             # Allocate golfers on glf109y and find the row number
@@ -761,7 +792,7 @@ class GolfService:
                     break
 
             if alloc_row_num is None:
-                self._close_session()
+                self._close_active()
                 return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
 
             # Replicate the redirect() function's submit logic
@@ -791,10 +822,10 @@ class GolfService:
             }
 
         except PWTimeout:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception(
@@ -803,5 +834,387 @@ class GolfService:
                 course_name,
                 time_str,
             )
-            self._close_session()
+            self._close_active()
             return {"success": False, "error": "Booking failed. Please try again."}
+
+    # ── Requests (Requests and Templates feature) ─────────────────────────────
+    # Note: Single Group only (max 4 golfers). Templates feature deferred.
+
+    def _nav_to_requests_landing(self, page):
+        """Navigate from glf100 to the Requests landing page."""
+        logger.info("requests.nav_landing url=%s", page.url)
+        page.locator("a", has_text="Requests and Templates").first.click(timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        logger.info("requests.nav_landing.done url=%s", page.url)
+
+    def _open_create_new_request(self, page):
+        """From the Requests landing page, click 'Create New Request'."""
+        logger.info("requests.open_form url=%s", page.url)
+        page.locator("a", has_text="Create New Request").first.click(timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        logger.info("requests.open_form.done url=%s", page.url)
+
+    def _format_site_time(self, t):
+        """Convert "12:00" / "9:00" to the 4-digit format the site accepts (1200, 0900).
+        Returns empty string for empty input."""
+        if not t:
+            return ""
+        digits = "".join(ch for ch in str(t) if ch.isdigit())
+        if not digits:
+            return ""
+        if len(digits) == 3:
+            digits = "0" + digits
+        return digits[:4].zfill(4)
+
+    def _request_date_value(self, play_date):
+        """Convert UI date strings to the request form's YYYYMMDD option value."""
+        raw = str(play_date or "").strip()
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+        if m:
+            month, day, year = m.groups()
+            return f"{year}{int(month):02d}{int(day):02d}"
+        m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw)
+        if m:
+            year, month, day = m.groups()
+            return f"{year}{int(month):02d}{int(day):02d}"
+        return raw
+
+    def _scrape_available_courses(self, page):
+        """On the course selection page, return the list of available course
+        labels from the 'Available Courses' listbox in the order shown."""
+        # The course-selection page has two <select> elements (multiple).
+        # The first is "Available Courses", the second is "Selected Courses".
+        return page.evaluate("""() => {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const multi = selects.filter(s => s.multiple);
+            const src = multi.length > 0 ? multi[0] : selects[0];
+            if (!src) return [];
+            return Array.from(src.options).map(o => (o.innerText || o.value || '').trim()).filter(Boolean);
+        }""") or []
+
+    def _fill_request_form(self, page, play_date, max_golfers, has_guests,
+                           course_type, any_course, time_to_play,
+                           earliest_time, latest_time, preference):
+        """Fill the first request form (Play Date, Max Golfers, etc.)."""
+        filled = page.evaluate(
+            """(values) => {
+                const form = document.forms.reqdta;
+                if (!form) return false;
+                const eventOpts = { bubbles: true };
+                const fire = el => {
+                    el.dispatchEvent(new Event('input', eventOpts));
+                    el.dispatchEvent(new Event('change', eventOpts));
+                };
+                const setValue = (name, value) => {
+                    const field = form.elements[name];
+                    if (!field) return false;
+                    field.value = String(value);
+                    fire(field);
+                    return true;
+                };
+                const setRadio = (name, value) => {
+                    const radios = Array.from(form.querySelectorAll(`input[name="${name}"]`));
+                    if (!radios.length) return false;
+                    const radio = radios.find(r => r.value === value);
+                    if (!radio) return false;
+                    radio.checked = true;
+                    fire(radio);
+                    return true;
+                };
+
+                const ok = [];
+                ok.push(setValue('playdate', values.playDate));
+                ok.push(setValue('noofglf', values.maxGolfers));
+                ok.push(setRadio('anygsts', values.hasGuests ? 'Y' : 'N'));
+                ok.push(setValue('crstype', values.courseTypeCode));
+                ok.push(setRadio('anycrs', values.anyCourse ? 'Y' : 'N'));
+                ok.push(setValue('exactt', values.timeToPlay));
+                ok.push(setValue('strtt', values.earliestTime));
+                ok.push(setValue('latet', values.latestTime));
+                ok.push(setRadio('pref', values.preference === 'Course' ? 'C' : 'T'));
+                return ok.every(Boolean);
+            }""",
+            {
+                "playDate": self._request_date_value(play_date),
+                "maxGolfers": max_golfers,
+                "hasGuests": has_guests,
+                "courseTypeCode": _COURSE_TYPE_CODES.get(course_type, "01"),
+                "anyCourse": any_course,
+                "timeToPlay": self._format_site_time(time_to_play) or "1100",
+                "earliestTime": self._format_site_time(earliest_time) or "0700",
+                "latestTime": self._format_site_time(latest_time) or "0600",
+                "preference": preference if preference in ("Course", "Time") else "Course",
+            },
+        )
+        if not filled:
+            raise RuntimeError("Request form layout was not recognized.")
+
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+            page.evaluate("document.forms.reqdta.submit()")
+
+    def _select_request_courses(self, page, course_choices):
+        """On the course selection page, select the user's chosen courses in
+        preference order using the >> button. course_choices is a list of
+        course labels exactly as they appear in the Available Courses listbox."""
+        if not course_choices:
+            return
+        selects = page.locator("select").all()
+        if len(selects) < 2:
+            raise RuntimeError("Course selection page layout unexpected.")
+        available = selects[0]
+
+        for label in course_choices:
+            try:
+                available.select_option(label=label)
+            except Exception:
+                # Try by exact text (the option innerText may include whitespace)
+                available.evaluate(
+                    "(sel, target) => {"
+                    "  for (const o of sel.options) {"
+                    "    if ((o.innerText || '').trim() === target) {"
+                    "      o.selected = true; sel.dispatchEvent(new Event('change')); return;"
+                    "    }"
+                    "  }"
+                    "}",
+                    label,
+                )
+            # Click the >> button to move it into Selected Courses.
+            page.locator('input[type="button"]').evaluate_all(
+                """buttons => {
+                    const btn = buttons.find(b => (b.value || '').includes('>>'));
+                    if (!btn) throw new Error('Move course button not found');
+                    btn.click();
+                }"""
+            )
+
+    def _fill_request_golfers(self, page, golfer_ids):
+        """On the golfer entry page, fill Group 1 Golfer N rows with IDs."""
+        ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
+        if not ids:
+            raise RuntimeError("No golfer IDs provided for request.")
+
+        # Fill Golfer ID inputs in row order. The page has a Golfer ID text
+        # input and a Name <select> per row; filling the ID typically auto-
+        # populates the name on blur, but we also try to set the name dropdown.
+        for idx, gid in enumerate(ids[:4]):  # Group 1 = up to 4 slots
+            field_name = f"glfers{idx + 1}"
+            field = page.locator(f'input[name="{field_name}"]').first
+            field.fill(gid)
+            field.blur()
+
+        # Try to find a name dropdown per row and select by value (golfer id).
+        for idx, gid in enumerate(ids[:4]):
+            select_name = f"buddy{idx + 1}"
+            try:
+                page.locator(f'select[name="{select_name}"]').first.select_option(value=gid)
+            except Exception:
+                pass  # ID-only fill may be enough
+
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=25000):
+            page.locator('input[name="but2"]').first.click()
+
+    def _extract_request_confirmation(self, page):
+        """On the confirmation page, scrape the Request No."""
+        body = page.inner_text("body")
+        m = re.search(r"Request\s*No\.?\s*[:\-]?\s*(\d+)", body, re.IGNORECASE)
+        return m.group(1) if m else None
+
+    def fetch_request_courses(self, tvn_username, tvn_password, golf_password,
+                              play_date, course_type="Championship",
+                              any_course=False):
+        """Open the request form just far enough to scrape the available
+        courses for a given date + course type, then navigate back to the menu.
+        Returns {success, courses: [labels]}."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+            self._open_create_new_request(page)
+            self._fill_request_form(
+                page,
+                play_date=play_date,
+                max_golfers=1,
+                has_guests=False,
+                course_type=course_type,
+                any_course=any_course,
+                time_to_play="",
+                earliest_time="",
+                latest_time="",
+                preference="Course",
+            )
+            courses = self._scrape_available_courses(page)
+            # Try to back out to the menu so the session is reusable.
+            try:
+                page.locator("a", has_text="Back to the Menu").first.click(timeout=3000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._active.ts = _time.time()
+            return {"success": True, "courses": courses}
+        except PWTimeout:
+            self._close_active()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_active()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("fetch_request_courses failed for user=%s", tvn_username)
+            self._close_active()
+            return {"success": False, "error": "Could not load course list. Please try again."}
+
+    def submit_request(self, tvn_username, tvn_password, golf_password,
+                       play_date, max_golfers, has_guests, course_type,
+                       any_course, time_to_play, earliest_time, latest_time,
+                       preference, course_choices, golfer_ids):
+        """Submit a tee-time request. Returns {success, request_no}."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+            self._open_create_new_request(page)
+            self._fill_request_form(
+                page,
+                play_date=play_date,
+                max_golfers=max_golfers,
+                has_guests=has_guests,
+                course_type=course_type,
+                any_course=any_course,
+                time_to_play=time_to_play,
+                earliest_time=earliest_time,
+                latest_time=latest_time,
+                preference=preference,
+            )
+            self._select_request_courses(page, course_choices)
+            self._fill_request_golfers(page, golfer_ids)
+            request_no = self._extract_request_confirmation(page)
+            self._active.ts = _time.time()
+            if not request_no:
+                return {"success": False, "error": "Request submitted but no confirmation number was returned."}
+            return {
+                "success": True,
+                "request_no": request_no,
+                "message": f"Request #{request_no} submitted",
+            }
+        except PWTimeout:
+            self._close_active()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_active()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("submit_request failed for user=%s", tvn_username)
+            self._close_active()
+            return {"success": False, "error": "Could not submit request. Please try again."}
+
+    def view_my_requests(self, tvn_username, tvn_password, golf_password):
+        """Scrape pending requests from the Requests landing page."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+
+            raw_rows = page.evaluate("""() => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                return rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td')).map(c =>
+                        (c.innerText || '').replace(/\\s+/g, ' ').trim()
+                    );
+                    const links = Array.from(row.querySelectorAll('a')).map(a => ({
+                        text: (a.innerText || '').trim(),
+                        href: a.getAttribute('href') || '',
+                    }));
+                    return { cells, links };
+                }).filter(r => r.cells.some(Boolean));
+            }""")
+
+            requests_out = []
+            for row in raw_rows:
+                cells = row.get("cells") or []
+                links = row.get("links") or []
+                if len(cells) < 3:
+                    continue
+                action = (cells[0] or "").strip()
+                name = (cells[1] or "").strip()
+                date = (cells[2] or "").strip()
+                lower = action.lower()
+                if not action or "create new" in lower or "action" in lower:
+                    continue
+                # An existing request row will have a request number we can use as ID.
+                rid = None
+                for link in links:
+                    href = link.get("href", "")
+                    m = re.search(r"(\d{5,})", href)
+                    if m:
+                        rid = m.group(1)
+                        break
+                if not rid:
+                    m = re.search(r"(\d{5,})", " ".join([action, name]))
+                    if m:
+                        rid = m.group(1)
+                if not rid:
+                    continue
+                requests_out.append({
+                    "request_id": rid,
+                    "action": action,
+                    "name": name,
+                    "date": date,
+                })
+
+            self._active.ts = _time.time()
+            return {"success": True, "requests": requests_out}
+        except PWTimeout:
+            self._close_active()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_active()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("view_my_requests failed for user=%s", tvn_username)
+            self._close_active()
+            return {"success": False, "error": "Could not load your requests. Please try again."}
+
+    def delete_request(self, tvn_username, tvn_password, golf_password, target_request_id):
+        """Cancel a pending request by ID from the Requests landing page."""
+        try:
+            _, page = self._get_or_create_session(tvn_username)
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(page)
+
+            # Find the row containing this request id and click its delete/cancel link.
+            target = str(target_request_id).strip()
+            handled = page.evaluate("""(rid) => {
+                const rows = Array.from(document.querySelectorAll('table tr'));
+                for (const row of rows) {
+                    const text = (row.innerText || '');
+                    if (text.includes(rid)) {
+                        const link = row.querySelector('a');
+                        if (link) { link.click(); return true; }
+                    }
+                }
+                return false;
+            }""", target)
+
+            if not handled:
+                return {"success": False, "error": "Request not found."}
+
+            page.wait_for_load_state("networkidle", timeout=15000)
+            # If a confirmation prompt appears, accept it.
+            try:
+                page.on("dialog", lambda d: d.accept())
+                page.locator('input[value="Yes"], input[value="Delete"], input[value="Cancel Request"]').first.click(timeout=3000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+
+            self._active.ts = _time.time()
+            return {"success": True, "message": f"Request {target} canceled"}
+        except PWTimeout:
+            self._close_active()
+            return {"success": False, "error": _timeout_error()}
+        except RuntimeError as e:
+            self._close_active()
+            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("delete_request failed for user=%s", tvn_username)
+            self._close_active()
+            return {"success": False, "error": "Could not cancel that request. Please try again."}
