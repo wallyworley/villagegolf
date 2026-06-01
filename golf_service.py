@@ -997,14 +997,39 @@ class GolfService:
                     "}",
                     label,
                 )
-            # Click the >> button to move it into Selected Courses.
-            page.locator('input[type="button"]').evaluate_all(
-                """buttons => {
-                    const btn = buttons.find(b => (b.value || '').includes('>>'));
-                    if (!btn) throw new Error('Move course button not found');
+            # Click the "move into Selected" control. The Villages page label
+            # for this varies (>>, >, Add, →, Select), and it may be an
+            # input button OR an anchor/link, so match broadly. On failure,
+            # surface the actual controls present to aid debugging.
+            moved = page.evaluate(
+                """() => {
+                    const wanted = ['>>', '>', 'add', 'select', '\\u2192', '\\u00bb'];
+                    const cands = Array.from(document.querySelectorAll(
+                        'input[type="button"], input[type="submit"], button, a'
+                    ));
+                    const txt = el => ((el.value || el.innerText || el.textContent || '')
+                        .trim().toLowerCase());
+                    const btn = cands.find(el => {
+                        const t = txt(el);
+                        return wanted.some(w => t.includes(w.toLowerCase()));
+                    });
+                    if (!btn) {
+                        return {ok: false, found: cands.map(el =>
+                            (el.value || el.innerText || el.textContent || '').trim()
+                        ).filter(Boolean).slice(0, 20)};
+                    }
                     btn.click();
+                    return {ok: true};
                 }"""
             )
+            if not moved.get("ok"):
+                logger.error(
+                    "requests.move_button_not_found controls=%s",
+                    moved.get("found"),
+                )
+                raise RuntimeError(
+                    "Could not add the course to your selection. Please try again."
+                )
 
     def _fill_request_golfers(self, page, golfer_ids):
         """On the golfer entry page, fill Group 1 Golfer N rows with IDs."""
