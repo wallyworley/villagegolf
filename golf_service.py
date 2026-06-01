@@ -840,10 +840,29 @@ class GolfService:
     # ── Requests (Requests and Templates feature) ─────────────────────────────
     # Note: Single Group only (max 4 golfers). Templates feature deferred.
 
-    def _nav_to_requests_landing(self, page):
-        """Navigate from glf100 to the Requests landing page."""
+    def _nav_to_requests_landing(self, page, tvn_username=None, tvn_password=None,
+                                 golf_password=None):
+        """Navigate to the Requests landing page from the golf main menu.
+
+        Self-healing: a prior request action (e.g. fetch_request_courses) can
+        leave the session stranded on an intermediate page (glf105b, etc.)
+        where the "Requests and Templates" link is absent. Rather than hang on
+        a 10s click timeout, detect the missing link and recover to the main
+        menu first (re-running the PIN login) when credentials are available.
+        """
         logger.info("requests.nav_landing url=%s", page.url)
-        page.locator("a", has_text="Requests and Templates").first.click(timeout=10000)
+        link = page.locator("a", has_text="Requests and Templates")
+        if link.count() == 0:
+            logger.info("requests.nav_landing.recover url=%s", page.url)
+            if tvn_username and tvn_password and golf_password:
+                # Force a clean return to the main menu (glf100).
+                self._login(page, tvn_username, tvn_password, golf_password)
+                link = page.locator("a", has_text="Requests and Templates")
+            if link.count() == 0:
+                raise RuntimeError(
+                    "Could not reach the Requests page. Please try again."
+                )
+        link.first.click(timeout=10000)
         page.wait_for_load_state("domcontentloaded", timeout=10000)
         logger.info("requests.nav_landing.done url=%s", page.url)
 
@@ -1028,7 +1047,7 @@ class GolfService:
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._nav_to_requests_landing(page)
+            self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
             self._open_create_new_request(page)
             self._fill_request_form(
                 page,
@@ -1043,12 +1062,17 @@ class GolfService:
                 preference="Course",
             )
             courses = self._scrape_available_courses(page)
-            # Try to back out to the menu so the session is reusable.
+            # Return to a known-good main menu so the next request action starts
+            # clean. The "Back to the Menu" link is unreliable and can strand the
+            # session on an intermediate page (glf105b), so verify we actually
+            # landed on the menu and re-login if not.
             try:
                 page.locator("a", has_text="Back to the Menu").first.click(timeout=3000)
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+                pass
+            if "glf100" not in (page.url or "").lower():
+                self._login(page, tvn_username, tvn_password, golf_password)
             self._active.ts = _time.time()
             return {"success": True, "courses": courses}
         except PWTimeout:
@@ -1070,7 +1094,7 @@ class GolfService:
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._nav_to_requests_landing(page)
+            self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
             self._open_create_new_request(page)
             self._fill_request_form(
                 page,
@@ -1111,7 +1135,7 @@ class GolfService:
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._nav_to_requests_landing(page)
+            self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
 
             raw_rows = page.evaluate("""() => {
                 const rows = Array.from(document.querySelectorAll('table tr'));
@@ -1178,7 +1202,7 @@ class GolfService:
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._nav_to_requests_landing(page)
+            self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
 
             # Find the row containing this request id and click its delete/cancel link.
             target = str(target_request_id).strip()
