@@ -862,15 +862,15 @@ class GolfService:
                 raise RuntimeError(
                     "Could not reach the Requests page. Please try again."
                 )
-        link.first.click(timeout=10000)
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+            link.first.click(timeout=10000)
         logger.info("requests.nav_landing.done url=%s", page.url)
 
     def _open_create_new_request(self, page):
         """From the Requests landing page, click 'Create New Request'."""
         logger.info("requests.open_form url=%s", page.url)
-        page.locator("a", has_text="Create New Request").first.click(timeout=10000)
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+            page.locator("a", has_text="Create New Request").first.click(timeout=10000)
         logger.info("requests.open_form.done url=%s", page.url)
 
     def _format_site_time(self, t):
