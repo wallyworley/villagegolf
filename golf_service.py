@@ -1073,90 +1073,87 @@ class GolfService:
             page.evaluate("document.forms.reqdta.submit()")
 
     def _select_request_courses(self, page, course_choices):
-        """On the course selection page, select the user's chosen courses in
-        preference order using the >> button. course_choices is a list of
-        course labels exactly as they appear in the Available Courses listbox."""
+        """On glf105b, move the chosen courses from the 'Available Courses' list
+        (lwin) into the 'Selected Courses' list (rwin), in preference order.
+
+        The page is a dual-listbox: you select options in lwin and click the
+        " >> " button (onclick=move_item(lwin,rwin,'lr')) to append them to rwin.
+        Finalize (redirect(form, rwin, 2)) reads rwin, so the courses must
+        actually land there. We move one course at a time so rwin's order
+        matches the user's stated preference. course_choices are labels exactly
+        as they appear in lwin (that's what fetch_request_courses scraped)."""
         if not course_choices:
             return
-        selects = page.locator("select").all()
-        if len(selects) < 2:
+        form = page.locator('form[name="f1"]')
+        if (page.locator('select[name="lwin"]').count() == 0
+                or page.locator('select[name="rwin"]').count() == 0):
             raise RuntimeError("Course selection page layout unexpected.")
-        available = selects[0]
+        move_btn = page.locator('input[onclick^="move_item"]').first
+        if move_btn.count() == 0:
+            raise RuntimeError("Course move control not found on the request page.")
 
         for label in course_choices:
-            try:
-                available.select_option(label=label)
-            except Exception:
-                # Try by exact text (the option innerText may include whitespace)
-                available.evaluate(
-                    "(sel, target) => {"
-                    "  for (const o of sel.options) {"
-                    "    if ((o.innerText || '').trim() === target) {"
-                    "      o.selected = true; sel.dispatchEvent(new Event('change')); return;"
-                    "    }"
-                    "  }"
-                    "}",
-                    label,
-                )
-            # Click the "move into Selected" control. The Villages page label
-            # for this varies (>>, >, Add, →, Select), and it may be an
-            # input button OR an anchor/link, so match broadly. On failure,
-            # surface the actual controls present to aid debugging.
-            moved = page.evaluate(
-                """() => {
-                    const wanted = ['>>', '>', 'add', 'select', '\\u2192', '\\u00bb'];
-                    const cands = Array.from(document.querySelectorAll(
-                        'input[type="button"], input[type="submit"], button, a'
-                    ));
-                    const txt = el => ((el.value || el.innerText || el.textContent || '')
-                        .trim().toLowerCase());
-                    const btn = cands.find(el => {
-                        const t = txt(el);
-                        return wanted.some(w => t.includes(w.toLowerCase()));
-                    });
-                    if (!btn) {
-                        return {ok: false, found: cands.map(el =>
-                            (el.value || el.innerText || el.textContent || '').trim()
-                        ).filter(Boolean).slice(0, 20)};
+            # Select exactly this one option in lwin (by exact visible text),
+            # deselecting the rest, then click the page's own >> mover.
+            found = page.evaluate(
+                """(target) => {
+                    const lwin = document.forms.f1.lwin;
+                    let hit = false;
+                    for (const o of lwin.options) {
+                        const m = (o.innerText || o.value || '').trim() === target;
+                        o.selected = m;
+                        if (m) hit = true;
                     }
-                    btn.click();
-                    return {ok: true};
-                }"""
+                    return hit;
+                }""",
+                label,
             )
-            if not moved.get("ok"):
-                logger.error(
-                    "requests.move_button_not_found controls=%s",
-                    moved.get("found"),
-                )
+            if not found:
+                logger.error("requests.course_not_in_list label=%r", label)
                 raise RuntimeError(
-                    "Could not add the course to your selection. Please try again."
+                    f"'{label}' was not in the available course list. "
+                    "Please reload courses and try again."
                 )
+            move_btn.click()
+
+        # Verify rwin now holds every chosen course before finalizing.
+        selected = page.evaluate(
+            "() => Array.from(document.forms.f1.rwin.options)"
+            ".map(o => (o.innerText || '').trim())"
+        )
+        if len(selected) < len(course_choices):
+            logger.error("requests.rwin_short rwin=%s wanted=%s", selected, course_choices)
+            raise RuntimeError("Could not add all chosen courses. Please try again.")
 
     def _fill_request_golfers(self, page, golfer_ids):
-        """On the golfer entry page, fill Group 1 Golfer N rows with IDs."""
+        """On glf105b, pick golfers via the buddy1..4 dropdowns, then finalize.
+
+        Each buddyN <select> fires onchange=sel2inp(...) which writes the
+        golfer's ID into the hidden 'glfers' field the backend reads, so the
+        golfer must be chosen THROUGH the dropdown (select_option fires change),
+        not by writing 'glfers' directly. Then click 'Complete the
+        Request/Template' (but2 -> redirect(form, rwin, 2)) to submit."""
         ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
         if not ids:
             raise RuntimeError("No golfer IDs provided for request.")
 
-        # Fill Golfer ID inputs in row order. The page has a Golfer ID text
-        # input and a Name <select> per row; filling the ID typically auto-
-        # populates the name on blur, but we also try to set the name dropdown.
+        placed = 0
         for idx, gid in enumerate(ids[:4]):  # Group 1 = up to 4 slots
-            field_name = f"glfers{idx + 1}"
-            field = page.locator(f'input[name="{field_name}"]').first
-            field.fill(gid)
-            field.blur()
-
-        # Try to find a name dropdown per row and select by value (golfer id).
-        for idx, gid in enumerate(ids[:4]):
-            select_name = f"buddy{idx + 1}"
+            sel = page.locator(f'select[name="buddy{idx + 1}"]')
+            if sel.count() == 0:
+                break
             try:
-                page.locator(f'select[name="{select_name}"]').first.select_option(value=gid)
+                sel.first.select_option(value=gid)  # onchange -> sel2inp -> glfers
+                placed += 1
             except Exception:
-                pass  # ID-only fill may be enough
+                logger.warning(
+                    "requests.golfer_not_in_dropdown id=%s slot=%s", gid, idx + 1
+                )
+        if placed == 0:
+            raise RuntimeError("None of the selected golfers were available to add.")
 
         with page.expect_navigation(wait_until="domcontentloaded", timeout=25000):
-            page.locator('input[name="but2"]').first.click()
+            page.locator('input[name="but2"]').first.click()  # Complete the Request/Template
 
     def _extract_request_confirmation(self, page):
         """On the confirmation page, scrape the Request No."""
@@ -1324,37 +1321,49 @@ class GolfService:
             return {"success": False, "error": "Could not load your requests. Please try again."}
 
     def delete_request(self, tvn_username, tvn_password, golf_password, target_request_id):
-        """Cancel a pending request by ID from the Requests landing page."""
+        """Cancel a pending request by ID.
+
+        The Villages delete is TWO steps: on the landing page (glf105a) the
+        row's 'Delete this Request' link opens a confirmation page (glf105e),
+        where the 'Delete This Request' anchor finalizes it (glf105f). We match
+        the row by exact request number (not loose substring) and pick the
+        delete link specifically (never 'View'/'Change'), then confirm we are on
+        the right request before finalizing."""
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
-
-            # Find the row containing this request id and click its delete/cancel link.
             target = str(target_request_id).strip()
-            handled = page.evaluate("""(rid) => {
+
+            # Tag the delete link of the row whose Request No. matches exactly.
+            found = page.evaluate("""(rid) => {
                 const rows = Array.from(document.querySelectorAll('table tr'));
+                const tok = new RegExp('(^|\\\\D)' + rid + '(\\\\D|$)');
                 for (const row of rows) {
-                    const text = (row.innerText || '');
-                    if (text.includes(rid)) {
-                        const link = row.querySelector('a');
-                        if (link) { link.click(); return true; }
-                    }
+                    const cells = Array.from(row.querySelectorAll('td')).map(c => (c.innerText||'').trim());
+                    if (!tok.test(cells.join(' | '))) continue;
+                    const del = Array.from(row.querySelectorAll('a')).find(a =>
+                        /delete/i.test(a.innerText || '') && !/do not/i.test(a.innerText || ''));
+                    if (del) { del.setAttribute('data-del-target', '1'); return true; }
                 }
                 return false;
             }""", target)
-
-            if not handled:
+            if not found:
                 return {"success": False, "error": "Request not found."}
 
-            page.wait_for_load_state("networkidle", timeout=15000)
-            # If a confirmation prompt appears, accept it.
-            try:
-                page.on("dialog", lambda d: d.accept())
-                page.locator('input[value="Yes"], input[value="Delete"], input[value="Cancel Request"]').first.click(timeout=3000)
-                page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                pass
+            # Step 1: open the delete-confirmation page (glf105e).
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                page.locator('a[data-del-target="1"]').first.click(timeout=8000)
+
+            # Guard: make sure the confirmation page is for THIS request.
+            if target not in page.inner_text("body"):
+                self._login(page, tvn_username, tvn_password, golf_password)
+                return {"success": False,
+                        "error": "Could not confirm the request to cancel. Please try again."}
+
+            # Step 2: finalize — the confirm control is an anchor, not a button.
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                page.locator("a", has_text="Delete This Request").first.click(timeout=8000)
 
             self._active.ts = _time.time()
             return {"success": True, "message": f"Request {target} canceled"}
