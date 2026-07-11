@@ -12,16 +12,22 @@ Profile shape (one row per TVN username, stored as a JSON blob in `data`):
 
 Encryption at rest
 ------------------
-The `data` blob holds Villages credentials, so when USER_DB_ENCRYPTION_KEY is
-set the blob is encrypted with Fernet (AES-128-CBC + HMAC) before it touches
-disk. This protects a leaked DB file or backup. Reads are backward-compatible:
-a row that isn't a valid token is treated as legacy plaintext JSON, so an
-existing unencrypted DB keeps working and is upgraded to ciphertext on its next
-write. Generate a key with:
+The `data` blob holds Villages credentials (the resident's master
+thevillages.net password + golf PIN), so it is encrypted with Fernet
+(AES-128-CBC + HMAC) before it touches disk. This protects a leaked DB file or
+backup. Encryption is MANDATORY: if USER_DB_ENCRYPTION_KEY is unset the store
+refuses to operate, unless ALLOW_PLAINTEXT_USER_DB=1 is set for local dev.
+
+Reads are backward-compatible: a row that isn't a valid token is treated as
+legacy plaintext JSON, so an existing unencrypted DB keeps working and is
+upgraded to ciphertext on its next write. To upgrade every existing row in one
+pass, run:
+
+    USER_DB_ENCRYPTION_KEY=<key> python user_store.py reencrypt
+
+Generate a key with:
 
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-Without the key the store falls back to plaintext (a warning is logged once).
 """
 
 import json
@@ -42,23 +48,53 @@ _fernet = None
 _warned_plaintext = False
 
 
+_ENCRYPTION_REQUIRED_MSG = (
+    "USER_DB_ENCRYPTION_KEY is not set. User profiles hold Villages credentials "
+    "and must be encrypted at rest. Generate a key with "
+    '`python -c "from cryptography.fernet import Fernet; '
+    'print(Fernet.generate_key().decode())"` and set USER_DB_ENCRYPTION_KEY, or '
+    "set ALLOW_PLAINTEXT_USER_DB=1 for local dev only."
+)
+
+
+def _plaintext_allowed():
+    return os.environ.get("ALLOW_PLAINTEXT_USER_DB") == "1"
+
+
 def _get_fernet():
-    """Return a Fernet instance if a key is configured, else None."""
+    """Return a Fernet instance if a key is configured, else None.
+
+    Raises if no key is set and plaintext storage was not explicitly allowed
+    (ALLOW_PLAINTEXT_USER_DB=1), so production cannot silently write cleartext
+    credentials to disk.
+    """
     global _fernet, _warned_plaintext
     if _fernet is not None:
         return _fernet
     key = (os.environ.get("USER_DB_ENCRYPTION_KEY") or "").strip()
     if not key:
+        if not _plaintext_allowed():
+            raise RuntimeError(_ENCRYPTION_REQUIRED_MSG)
         if not _warned_plaintext:
             log.warning(
-                "USER_DB_ENCRYPTION_KEY not set — user profiles are stored as "
-                "plaintext. Set a Fernet key to encrypt credentials at rest."
+                "USER_DB_ENCRYPTION_KEY not set and ALLOW_PLAINTEXT_USER_DB=1 — "
+                "user profiles are stored as PLAINTEXT. Local dev only; never in "
+                "production."
             )
             _warned_plaintext = True
         return None
     from cryptography.fernet import Fernet
     _fernet = Fernet(key.encode())
     return _fernet
+
+
+def verify_encryption_config():
+    """Fail fast at startup if credentials-at-rest encryption isn't configured.
+
+    Call once at app boot so a missing key surfaces immediately rather than on
+    the first user's login/registration.
+    """
+    _get_fernet()  # raises if no key and ALLOW_PLAINTEXT_USER_DB != "1"
 
 
 def _encode(data):
@@ -161,3 +197,43 @@ def all_users():
     for username, blob in rows:
         out[username] = _decode(blob) or {}
     return out
+
+
+def reencrypt_all():
+    """Rewrite every row through the current codec.
+
+    With USER_DB_ENCRYPTION_KEY set, legacy plaintext rows are read via the
+    decode fallback and rewritten as ciphertext. Idempotent — already-encrypted
+    rows round-trip unchanged. Returns the number of rows rewritten.
+    """
+    _ensure_schema()
+    rewritten = 0
+    with closing(_connect()) as conn, conn:
+        rows = conn.execute("SELECT username, data FROM users").fetchall()
+        for username, stored in rows:
+            data = _decode(stored)
+            if data is None:
+                log.warning("reencrypt: skipping unreadable row for %r", username)
+                continue
+            conn.execute(
+                "UPDATE users SET data = ? WHERE username = ?",
+                (_encode(data), username),
+            )
+            rewritten += 1
+    return rewritten
+
+
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(level="INFO")
+    if len(sys.argv) >= 2 and sys.argv[1] == "reencrypt":
+        if not (os.environ.get("USER_DB_ENCRYPTION_KEY") or "").strip():
+            sys.exit(
+                "Refusing to re-encrypt: USER_DB_ENCRYPTION_KEY is not set. "
+                "Set the key first, then re-run."
+            )
+        n = reencrypt_all()
+        print(f"Re-encrypted {n} row(s) in {_DB_PATH}.")
+    else:
+        sys.exit("usage: python user_store.py reencrypt")

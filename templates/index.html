@@ -634,7 +634,7 @@
 </div>
 
 <!-- ── Confirm overlay ── -->
-<div class="overlay" id="overlay" onclick="if(event.target===this)closeConfirm()">
+<div class="overlay" id="overlay" onclick="if(event.target===this && !BOOKING_IN_FLIGHT)closeConfirm()">
   <div class="confirm-sheet">
     <div class="cs-title">Confirm Booking</div>
     <div class="cs-sub">Ready to lock in this tee time?</div>
@@ -723,15 +723,19 @@ async function loginUser(){
       enterApp(d);
     }
     else{
-      err.textContent=d.error||'Incorrect credentials';
+      // First-timers who type valid Villages credentials still fail here (they
+      // have no account yet), so always point them to Register rather than
+      // dead-ending on "incorrect". Username is kept so they don't retype it.
+      err.innerHTML=(d.error||'Incorrect username, password, or PIN')+
+        ' &nbsp;<a href="#" onclick="showRegister(document.getElementById(\'login-user-input\').value.trim());return false;" style="color:var(--g2);font-weight:700;text-decoration:underline;">First time? Register &#8250;</a>';
       document.getElementById('login-pass-input').value='';
       document.getElementById('login-pin-input').value='';
     }
   }catch(e){ err.textContent='Connection error. Try again.'; }
 }
 
-function showRegister(){
-  document.getElementById('reg-user').value='';
+function showRegister(prefillUser){
+  document.getElementById('reg-user').value=prefillUser||'';
   document.getElementById('reg-pass').value='';
   document.getElementById('reg-gpin').value='';
   document.getElementById('reg-email').value='';
@@ -962,7 +966,7 @@ function buildDates(){
     const c=document.createElement('div'); c.className='d-card';
     c.dataset.offset=String(i);
     c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div><div class="d-wx" id="wx-${isoDate}"></div>`;
-    c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; unlock('sec-golfers'); checkFetch(); };
+    c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; clearResults(); unlock('sec-golfers'); checkFetch(); };
     grid.appendChild(c);
     dateCards.push(isoDate);
   }
@@ -989,7 +993,7 @@ function buildGolfers(){
   BUDDIES.forEach(g=>{
     const c=document.createElement('div'); c.className='g-card'; c.dataset.id=g.id;
     c.innerHTML=`<div class="g-av">${esc(g.initials||'?')}</div><div><div class="g-name">${esc(g.name)}</div><div class="g-id">ID ${esc(g.id)}</div></div><div class="g-chk">&#10003;</div>`;
-    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
+    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); clearResults(); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
     list.appendChild(c);
   });
 }
@@ -1017,17 +1021,40 @@ async function addBuddy(){
   }catch(e){ showError('Connection error.'); }
 }
 
-function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); unlock('sec-time'); checkFetch(); }
+function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); clearResults(); unlock('sec-time'); checkFetch(); }
 function setRegion(region){
   S.regionFilter=region;
   ['all','north','central','south'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r===region));
+  clearResults();
 }
-function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>x.classList.remove('on')); el.classList.add('on'); unlock('sec-fetch'); checkFetch(); }
+function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>x.classList.remove('on')); el.classList.add('on'); clearResults(); unlock('sec-fetch'); checkFetch(); }
 function unlock(id){ document.getElementById(id).classList.remove('dim'); }
 function checkFetch(){ const ok=S.date&&S.golfers.length>0&&S.course&&S.timeFilter; document.getElementById('fetchBtn').disabled=!ok; if(ok) unlock('sec-fetch'); }
 
+let BOOKING_IN_FLIGHT=false;
+
+// Hide any shown tee-time results and clear the pending selection. Called
+// whenever a search input changes, so a golfer can never book a stale row that
+// belonged to a different date/golfers/course than what's now selected.
+function clearResults(){
+  const rs=document.getElementById('results-sec'); if(rs) rs.style.display='none';
+  const ss=document.getElementById('success-sec'); if(ss) ss.style.display='none';
+  const tl=document.getElementById('timeList'); if(tl) tl.innerHTML='';
+  S.pendingCourse=null; S.pendingTime=null; S.pendingDisplay=null;
+}
+
+// Booking couldn't be confirmed (timeout / network / server "unknown"). Never
+// invite a blind rebook \u2014 send the golfer to My Tee Times to verify first.
+function bookingUnconfirmed(msg){
+  clearResults();
+  showAppView('mytimes');
+  setMyTimesStatus(msg, 'error');
+  try{ loadMyTeeTimes(); }catch(e){}
+}
+
 async function fetchTimes(){
   showError('');
+  const fb=document.getElementById('fetchBtn'); fb.disabled=true;  // block double-submit
   document.getElementById('results-sec').style.display='none';
   document.getElementById('success-sec').style.display='none';
   const loader=document.getElementById('loaderSec'); loader.style.display='block';
@@ -1041,6 +1068,7 @@ async function fetchTimes(){
     if(!d.success){ showError(d.error||'Failed to fetch tee times.'); return; }
     renderTimes(d.times,d.date_label);
   }catch(e){ clearInterval(iv); loader.style.display='none'; showError('Network error \u2014 check your connection.'); }
+  finally{ clearInterval(iv); checkFetch(); }  // restore button per current inputs
 }
 
 function renderTimes(times,label){
@@ -1067,13 +1095,33 @@ function openConfirm(t){
 function closeConfirm(){ document.getElementById('overlay').classList.remove('show'); }
 
 async function confirmBook(){
+  if(BOOKING_IN_FLIGHT) return;          // guard against a double-tap
+  BOOKING_IN_FLIGHT=true;
   const btn=document.getElementById('cs-book-btn'); btn.disabled=true; btn.textContent='Booking\u2026';
+  const cancelBtn=document.querySelector('#overlay .cs-cancel'); if(cancelBtn) cancelBtn.disabled=true;
+  const ctrl=new AbortController();
+  const to=setTimeout(()=>ctrl.abort(), 120000);   // don't freeze forever
+  const bmsgs=['Reserving your tee time\u2026','Still working \u2014 please wait\u2026','Confirming with The Villages\u2026'];
+  let bi=0; const biv=setInterval(()=>{ if(bi<bmsgs.length-1) btn.textContent=bmsgs[++bi]; },8000);
   try{
-    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
+    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
     const d=await r.json(); closeConfirm();
-    if(!d.success){ showError(d.error||'Booking failed.'); return; }
+    if(!d.success){
+      // Server couldn't confirm the booking committed \u2014 route to My Tee Times.
+      if(d.unknown){ bookingUnconfirmed(d.error||'We could not confirm your booking. Check "My Tee Times" before trying again.'); }
+      else { showError(d.error||'Booking failed.'); }
+      return;
+    }
     showSuccess(d);
-  }catch(e){ closeConfirm(); showError('Network error during booking.'); }
+  }catch(e){
+    closeConfirm();
+    // Aborted or network failure: we don't know if it committed. Verify, don't rebook.
+    bookingUnconfirmed('We could not confirm your booking. Check "My Tee Times" to see whether it went through before trying again.');
+  }finally{
+    clearTimeout(to); clearInterval(biv); BOOKING_IN_FLIGHT=false;
+    btn.disabled=false; btn.textContent='\u26f3 Book It!';
+    if(cancelBtn) cancelBtn.disabled=false;
+  }
 }
 
 function showSuccess(d){

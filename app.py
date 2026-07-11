@@ -14,6 +14,7 @@ import uuid
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 load_dotenv()  # loads .env when running locally; no-op in Cloud Run
 
 logging.basicConfig(
@@ -43,10 +44,22 @@ if not SECRET_KEY:
         )
 app.secret_key = SECRET_KEY
 
+# Session cookie is a ~31-day bearer token, so it must not travel over plaintext
+# HTTP. Secure is on by default; local http dev sets SESSION_COOKIE_SECURE=0.
+_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE", "1") != "0"
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=_cookie_secure,
 )
+
+# Behind Caddy (a single trusted reverse proxy on localhost) the real client IP
+# arrives in X-Forwarded-For and the original scheme in X-Forwarded-Proto.
+# Trust one hop so login rate limiting keys on the actual client, not 127.0.0.1,
+# and Flask knows requests are https. Disable with TRUST_PROXY=0 when running
+# gunicorn/Flask directly without a proxy in front.
+if os.environ.get("TRUST_PROXY", "1") != "0":
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # ── Login rate limiting ───────────────────────────────────────────────────────
 _login_attempts = {}  # ip:user -> {"count": int, "locked_until": float}
@@ -95,6 +108,31 @@ def _clear_login_attempts(key):
         _login_attempts.pop(key, None)
 
 
+# ── Register rate limiting ────────────────────────────────────────────────────
+# /api/register is unauthenticated and each call drives a real headless-Chromium
+# login against thevillages.net with caller-supplied credentials. Without a cap
+# it is a brute-force oracle for residents' TVN passwords and a cheap way to
+# monopolize the single browser worker during the 7 AM rush. Limit per-IP
+# volume; credential-guessing also trips the shared ip:username login lockout.
+_register_attempts = {}  # ip -> {"count": int, "window_start": float}
+_register_lock = threading.Lock()
+_MAX_REGISTER_PER_HOUR = 10
+
+
+def _check_register_rate(ip):
+    """Return an error string if this IP has exceeded the hourly cap, else None."""
+    now = time.time()
+    with _register_lock:
+        rec = _register_attempts.get(ip)
+        if not rec or now - rec["window_start"] >= 3600:
+            _register_attempts[ip] = {"count": 1, "window_start": now}
+            return None
+        if rec["count"] >= _MAX_REGISTER_PER_HOUR:
+            return "Too many registration attempts. Please try again later."
+        rec["count"] += 1
+        return None
+
+
 def _worker_public_error(action):
     return _WORKER_PUBLIC_ERRORS.get(
         action,
@@ -105,6 +143,10 @@ def _worker_public_error(action):
 # ── User store (SQLite) ─────────────────────────────────────────────────────
 # Self-contained local store — no external cloud dependency. See user_store.py.
 import user_store
+
+# Fail fast at boot if credentials-at-rest encryption isn't configured, so we
+# never silently write cleartext Villages passwords/PINs to disk in production.
+user_store.verify_encryption_config()
 
 
 def _get_user(username):
@@ -127,16 +169,55 @@ def _all_users():
 
 
 # ── Email notifications ──────────────────────────────────────────────────────
-from email_notifications import send_booking_confirmation
+from email_notifications import send_booking_confirmation, send_email
+
+
+# ── Operator alerting ─────────────────────────────────────────────────────────
+# Email the operator when the browser worker errors or wedges, so selector drift
+# or a hung session is caught before the 7 AM rush instead of by golfers. Set
+# OPERATOR_ALERT_EMAIL to enable. Rate-limited so one bad morning can't flood.
+_OPERATOR_ALERT_EMAIL = (os.environ.get("OPERATOR_ALERT_EMAIL") or "").strip()
+_alert_state = {"last_sent": 0.0}
+_alert_lock = threading.Lock()
+_ALERT_COOLDOWN_SECONDS = 900  # at most one alert per 15 min
+
+
+def _operator_alert(subject, body):
+    """Email the operator about a worker failure (fire-and-forget, rate-limited)."""
+    if not _OPERATOR_ALERT_EMAIL:
+        return
+    now = time.time()
+    with _alert_lock:
+        if now - _alert_state["last_sent"] < _ALERT_COOLDOWN_SECONDS:
+            return
+        _alert_state["last_sent"] = now
+
+    def _task():
+        try:
+            send_email(_OPERATOR_ALERT_EMAIL, subject, body)
+        except Exception as e:  # never let alerting break the request path
+            app.logger.warning("operator_alert.error error=%s", e)
+
+    threading.Thread(target=_task, name="operator-alert", daemon=True).start()
 
 
 # ── Golf Worker ───────────────────────────────────────────────────────────────
 class GolfWorker:
     """Single-threaded worker so Playwright objects stay on one thread."""
 
+    # A single Playwright call (e.g. a hung page.evaluate) has no timeout and can
+    # wedge this one worker thread forever, taking the whole app down. If a job
+    # runs past this deadline it is definitively stuck (the caller already gave
+    # up at 240s), so we self-terminate and let systemd/gunicorn restart us.
+    # Set comfortably above the 240s call timeout so slow-but-progressing jobs
+    # are never killed.
+    _WATCHDOG_SECONDS = int(os.environ.get("WORKER_WATCHDOG_SECONDS", "280"))
+
     def __init__(self):
         self._job_q = queue.Queue()
         self._ready = threading.Event()
+        self._current = {"started": 0.0, "method": None}
+        self._current_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._run,
             name="golf-worker",
@@ -146,6 +227,32 @@ class GolfWorker:
         self._ready.wait(timeout=10)
         if not self._ready.is_set():
             raise RuntimeError("Golf worker failed to start")
+        threading.Thread(
+            target=self._watchdog_loop,
+            name="golf-watchdog",
+            daemon=True,
+        ).start()
+
+    def _watchdog_loop(self):
+        """Kill the process if a single job wedges the worker thread."""
+        while True:
+            time.sleep(10)
+            with self._current_lock:
+                started = self._current["started"]
+                method = self._current["method"]
+            if started and (time.monotonic() - started) > self._WATCHDOG_SECONDS:
+                elapsed = int(time.monotonic() - started)
+                app.logger.error(
+                    "worker.watchdog wedged method=%s elapsed_s=%s — restarting process",
+                    method, elapsed,
+                )
+                _operator_alert(
+                    "Golf worker wedged — restarting",
+                    f"A '{method}' job ran {elapsed}s (watchdog {self._WATCHDOG_SECONDS}s) "
+                    "and appears stuck. The process is self-terminating so it restarts.",
+                )
+                time.sleep(2)  # give the alert thread a moment to fire
+                os._exit(1)
 
     def _run(self):
         from golf_service import GolfService
@@ -159,12 +266,23 @@ class GolfWorker:
                 break
 
             method_name, kwargs, done = job
+            # Skip jobs whose caller already gave up (timed out) while this one
+            # sat in the queue. Executing a booking after the user was told it
+            # failed would produce a silent/duplicate reservation.
+            if done.get("cancelled"):
+                app.logger.warning("worker.skip_cancelled method=%s", method_name)
+                done["event"].set()
+                continue
+            with self._current_lock:
+                self._current = {"started": time.monotonic(), "method": method_name}
             try:
                 method = getattr(service, method_name)
                 done["result"] = method(**kwargs)
             except Exception as exc:
                 done["error"] = exc
             finally:
+                with self._current_lock:
+                    self._current = {"started": 0.0, "method": None}
                 done["event"].set()
 
     def call(self, method_name, request_id="-", action=None, **kwargs):
@@ -180,16 +298,26 @@ class GolfWorker:
             method_name,
         )
 
-        done = {"event": threading.Event(), "result": None, "error": None}
+        done = {"event": threading.Event(), "result": None, "error": None,
+                "cancelled": False}
         self._job_q.put((method_name, kwargs, done))
 
         if not done["event"].wait(timeout=240):
+            # Mark the job cancelled so the worker skips it if it is still queued
+            # behind a slow job. (A job already mid-execution is not stopped here;
+            # that is the golf_service watchdog's job.)
+            done["cancelled"] = True
             elapsed_ms = int((time.monotonic() - started) * 1000)
             app.logger.error(
                 "worker.timeout request_id=%s action=%s duration_ms=%s",
                 request_id,
                 action,
                 elapsed_ms,
+            )
+            _operator_alert(
+                "Golf worker timeout",
+                f"A '{action}' job exceeded 240s (request_id={request_id}). "
+                "The browser worker may be wedged or the queue saturated.",
             )
             return {"success": False, "error": "Internal timeout waiting for booking worker."}
         if done["error"] is not None:
@@ -201,8 +329,16 @@ class GolfWorker:
                 elapsed_ms,
                 exc_info=done["error"],
             )
+            _operator_alert(
+                f"Golf worker error: {action}",
+                f"A '{action}' job raised {type(done['error']).__name__}: "
+                f"{done['error']} (request_id={request_id}). Possible selector "
+                "drift on thevillages.net.",
+            )
             return {"success": False, "error": _worker_public_error(action)}
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        global _worker_last_success_ts
+        _worker_last_success_ts = time.time()
         app.logger.info(
             "worker.done request_id=%s action=%s duration_ms=%s success=%s",
             request_id,
@@ -215,6 +351,7 @@ class GolfWorker:
 
 _worker = None
 _worker_lock = threading.Lock()
+_worker_last_success_ts = 0.0  # wall-clock of the last successful worker job
 
 
 def get_worker():
@@ -382,6 +519,31 @@ def index():
     return send_from_directory("templates", "index.html")
 
 
+@app.route("/healthz")
+def healthz():
+    """Liveness/health probe for an uptime monitor. No auth; leaks no secrets.
+
+    Reports whether the browser worker thread is alive, the current job-queue
+    depth, and how long since the last successful worker job — so selector
+    drift or a wedged session is visible before golfers hit it at 7 AM.
+    """
+    w = _worker
+    if w is None:
+        # Lazily-created worker hasn't been needed yet — idle, not unhealthy.
+        status, code, alive, depth = "idle", 200, None, None
+    elif w._thread.is_alive():
+        status, code, alive, depth = "ok", 200, True, w._job_q.qsize()
+    else:
+        status, code, alive, depth = "degraded", 503, False, w._job_q.qsize()
+    since = (time.time() - _worker_last_success_ts) if _worker_last_success_ts else None
+    return jsonify({
+        "status": status,
+        "worker_alive": alive,
+        "queue_depth": depth,
+        "seconds_since_last_success": round(since, 1) if since is not None else None,
+    }), code
+
+
 @app.route("/api/session", methods=["GET"])
 def get_session():
     """Return current session state so the frontend can skip screens."""
@@ -450,6 +612,16 @@ def register_user():
     if not tvn_username or not tvn_password or not golf_password:
         return jsonify({"ok": False, "error": "All fields are required."}), 400
 
+    ip = request.remote_addr or "unknown"
+    reg_limit = _check_register_rate(ip)
+    if reg_limit:
+        app.logger.info("api.denied request_id=%s action=register reason=rate_limited", request_id)
+        return jsonify({"ok": False, "error": reg_limit}), 429
+    rate_key = _login_key(ip, tvn_username)
+    lockout = _check_login_rate(rate_key)
+    if lockout:
+        return jsonify({"ok": False, "error": lockout}), 429
+
     app.logger.info("api.start request_id=%s action=register user=%s", request_id, tvn_username)
 
     result = get_worker().call(
@@ -462,8 +634,11 @@ def register_user():
     )
 
     if not result.get("success"):
+        _record_login_failure(rate_key)
         app.logger.info("api.done request_id=%s action=register success=False", request_id)
         return jsonify({"ok": False, "error": result.get("error", "Registration failed.")}), 400
+
+    _clear_login_attempts(rate_key)
 
     primary = result.get("primary")
     buddies = result.get("buddies", [])
@@ -595,17 +770,20 @@ def update_email():
 
 @app.route("/api/remove-user", methods=["POST"])
 def remove_user():
-    """Remove a cached user profile."""
+    """Remove the currently logged-in user's OWN cached profile.
+
+    The target is taken from the session, never the request body, so a logged-in
+    golfer cannot delete anyone else's account (IDOR). The session is fully
+    cleared afterward to avoid a half-authenticated state.
+    """
     err = require_auth()
     if err:
         return err
-    data = request.get_json() or {}
-    username = (data.get("username") or "").strip()
+    username = session.get("username")
     if not username:
-        return jsonify({"ok": False, "error": "Username required."}), 400
+        return jsonify({"ok": False, "error": "No user selected."}), 400
     _delete_user(username)
-    if session.get("username") == username:
-        session.pop("username", None)
+    session.clear()
     return jsonify({"ok": True})
 
 
@@ -774,6 +952,8 @@ def book_tee_time():
     )
     data_date_label = (data.get("date_label") or "").strip()
     data_golfer_ids = data.get("golfer_ids") or []
+    data_date = (data.get("date") or "").strip()
+    data_num_golfers = data.get("num_golfers")
 
     result = get_worker().call(
         "book_tee_time",
@@ -784,6 +964,12 @@ def book_tee_time():
         golf_password=user["golf_password"],
         course_name=course_name,
         time_str=time_str,
+        # Validated server-side against the session's search context so we can't
+        # book a stale row after the golfer changed date/golfers without
+        # re-fetching. Skipped when the frontend omits them (backward compatible).
+        expected_date=data_date or None,
+        expected_golfer_ids=data_golfer_ids or None,
+        expected_num_golfers=data_num_golfers,
     )
     elapsed_ms = int((time.monotonic() - started) * 1000)
     app.logger.info(

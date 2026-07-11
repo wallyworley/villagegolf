@@ -182,6 +182,9 @@ class GolfService:
     # dict of browsers on one thread is safe. Least-recently-used is evicted
     # when the pool is full.
     _MAX_SESSIONS = int(os.environ.get("MAX_BROWSER_SESSIONS", "4"))
+    # A session used within this window is treated as "mid-shopping" (a golfer
+    # who searched and is about to book) and protected from LRU eviction.
+    _SEARCH_PROTECT_SECONDS = int(os.environ.get("SESSION_PROTECT_SECONDS", "300"))
 
     def __init__(self):
         from collections import OrderedDict
@@ -242,9 +245,19 @@ class GolfService:
         if sess:
             self._drop_session(tvn_username)
 
-        # Evict least-recently-used sessions until there is room.
+        # Evict to make room, but never evict a golfer who just searched and is
+        # about to book (the 7 AM money path). Prefer the oldest idle session;
+        # only if every session is mid-shopping do we evict the absolute oldest.
+        now = _time.time()
         while len(self._sessions) >= self._MAX_SESSIONS:
-            _, old_sess = self._sessions.popitem(last=False)
+            victim_key = None
+            for key, s in self._sessions.items():  # oldest-first (LRU order)
+                if now - (s.ts or 0) > self._SEARCH_PROTECT_SECONDS:
+                    victim_key = key
+                    break
+            if victim_key is None:
+                victim_key = next(iter(self._sessions))  # all busy — evict oldest
+            old_sess = self._sessions.pop(victim_key)
             self._close(old_sess)
 
         sess = _Session()
@@ -425,6 +438,35 @@ class GolfService:
             })
 
         return reservations
+
+    def _find_booked_reservation(self, page, tvn_username, tvn_password,
+                                 golf_password, time_str, expected_date=None):
+        """After an ambiguous booking submit, check glf109a for a matching
+        reservation. Returns the reservation dict if one is found, else None.
+
+        Used to distinguish "the confirmation page was just slow / worded
+        differently" (booking DID commit) from "the booking never happened",
+        so we never report a plain failure that invites a duplicate booking.
+        Best-effort: any navigation error yields None (treated as unconfirmed).
+        """
+        try:
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_glf109a(page)
+            reservations = self._extract_reservations(page)
+        except Exception:
+            logger.exception("book reconciliation failed for user=%s", tvn_username)
+            return None
+
+        want_time = (_display_time(time_str) or "").upper()
+        want_date = (str(expected_date).strip().lower() if expected_date else "")
+        for r in reservations:
+            rtime = (r.get("display_time") or "").upper()
+            if not rtime or rtime != want_time:
+                continue
+            if want_date and want_date not in (r.get("date") or "").lower():
+                continue
+            return r
+        return None
 
     def _setup_reservation(self, page, num_golfers, has_guests, course_type,
                            golfer_ids, date_str):
@@ -739,13 +781,17 @@ class GolfService:
             self._close_active()
             return {"success": False, "error": "Could not delete that reservation right now. Please try again."}
 
-    def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str):
+    def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str,
+                      expected_date=None, expected_golfer_ids=None, expected_num_golfers=None):
         try:
             # Booking must reuse the exact session built by get_available_times().
             # Look it up by user so another golfer's request can't clobber it.
             sess = self._sessions.get(tvn_username)
             if not sess or not self._session_usable(sess):
                 return {"success": False, "error": "Session expired. Please fetch tee times again."}
+            # Keep this session warm — it just searched and is about to book, so
+            # it must not be the LRU victim if another golfer needs a session.
+            self._sessions.move_to_end(tvn_username)
             self._active, self._active_user = sess, tvn_username
             page = sess.page
             ctx = sess.search_context or {}
@@ -754,6 +800,28 @@ class GolfService:
                 return {"success": False, "error": "Search context changed. Please fetch tee times again."}
             if "glf109e" not in (page.url or "").lower():
                 return {"success": False, "error": "Tee-time page is no longer active. Please fetch tee times again."}
+
+            # Defense-in-depth: the pooled session's glf109e page reflects the
+            # LAST search. If the frontend is now asking to book against a
+            # different date / golfers / party size than that search, refuse —
+            # otherwise we would book the stale row while the confirmation sheet
+            # and email describe the golfer's newer selection.
+            if expected_date and str(expected_date).strip() != str(ctx.get("date_str", "")).strip():
+                return {"success": False,
+                        "error": "Your date changed since you searched. Please fetch tee times again."}
+            if expected_num_golfers is not None:
+                try:
+                    if int(expected_num_golfers) != int(ctx.get("num_golfers", 0)):
+                        return {"success": False,
+                                "error": "Your golfers changed since you searched. Please fetch tee times again."}
+                except (TypeError, ValueError):
+                    pass
+            if expected_golfer_ids is not None:
+                want = sorted(str(g).strip() for g in expected_golfer_ids if str(g).strip())
+                have = sorted(str(g).strip() for g in (ctx.get("golfer_ids") or []))
+                if want and want != have:
+                    return {"success": False,
+                            "error": "Your golfers changed since you searched. Please fetch tee times again."}
 
             # Click the course/time row on glf109e
             rows = page.query_selector_all("table tr")
@@ -806,11 +874,44 @@ class GolfService:
                 form.availw.value = 'x';
                 form.submit();
             """)
-            page.wait_for_url("**/glf109g**", timeout=30000)
+            # The form is now submitted. Everything below is confirmation, NOT
+            # commit \u2014 so a timeout or a differently-worded confirmation page
+            # does NOT mean the booking failed. Never report a plain failure
+            # here without first checking whether it actually went through.
+            res_no = None
+            try:
+                page.wait_for_url("**/glf109g**", timeout=30000)
+                body = page.inner_text("body")
+                res_match = re.search(r"Reservation No\.\s*(\d+)", body)
+                if res_match:
+                    res_no = res_match.group(1)
+            except PWTimeout:
+                logger.warning(
+                    "book: glf109g confirmation timed out user=%s time=%s \u2014 reconciling",
+                    tvn_username, time_str,
+                )
 
-            body = page.inner_text("body")
-            res_match = re.search(r"Reservation No\.\s*(\d+)", body)
-            res_no = res_match.group(1) if res_match else "\u2014"
+            # If we didn't capture a real reservation number (slow confirmation,
+            # reworded page, or a silent commit), reconcile against the live
+            # reservations list before deciding success/failure.
+            if not res_no:
+                found = self._find_booked_reservation(
+                    page, tvn_username, tvn_password, golf_password,
+                    time_str, expected_date,
+                )
+                if found and found.get("reservation_no"):
+                    res_no = found["reservation_no"]
+                else:
+                    # Genuinely unconfirmed. Drop the (unknown-state) session and
+                    # tell the golfer to verify rather than blindly rebook.
+                    self._close_active()
+                    return {
+                        "success": False,
+                        "unknown": True,
+                        "error": ("We could not confirm your booking. Open \u201cMy Tee "
+                                  "Times\u201d to check whether it went through before "
+                                  "trying again."),
+                    }
 
             return {
                 "success":        True,
