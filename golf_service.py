@@ -1000,17 +1000,31 @@ class GolfService:
         return raw
 
     def _scrape_available_courses(self, page):
-        """On the course selection page, return the list of available course
-        labels from the 'Available Courses' listbox in the order shown."""
+        """On the course selection page, return the course labels from the
+        'Available Courses' listbox, split into open vs closed.
+
+        The page greys out (inline color #999999) courses that are closed or
+        have nothing available for the chosen date; its own move_item() JS
+        refuses to move those and pops an alert. Mirror that exact check here
+        so we never offer a course the site will reject."""
         # The course-selection page has two <select> elements (multiple).
         # The first is "Available Courses", the second is "Selected Courses".
-        return page.evaluate("""() => {
+        result = page.evaluate("""() => {
             const selects = Array.from(document.querySelectorAll('select'));
             const multi = selects.filter(s => s.multiple);
             const src = multi.length > 0 ? multi[0] : selects[0];
-            if (!src) return [];
-            return Array.from(src.options).map(o => (o.innerText || o.value || '').trim()).filter(Boolean);
-        }""") or []
+            if (!src) return {open: [], closed: []};
+            const open = [], closed = [];
+            for (const o of src.options) {
+                const label = (o.innerText || o.value || '').trim();
+                if (!label) continue;
+                const c = (o.style.color || '').replace(/\\s+/g, '').toLowerCase();
+                const grey = c === 'rgb(153,153,153)' || c === '#999999';
+                (grey ? closed : open).push(label);
+            }
+            return {open, closed};
+        }""") or {"open": [], "closed": []}
+        return result
 
     def _fill_request_form(self, page, play_date, max_golfers, has_guests,
                            course_type, any_course, time_to_play,
@@ -1092,29 +1106,57 @@ class GolfService:
         if move_btn.count() == 0:
             raise RuntimeError("Course move control not found on the request page.")
 
-        for label in course_choices:
-            # Select exactly this one option in lwin (by exact visible text),
-            # deselecting the rest, then click the page's own >> mover.
-            found = page.evaluate(
-                """(target) => {
-                    const lwin = document.forms.f1.lwin;
-                    let hit = false;
-                    for (const o of lwin.options) {
-                        const m = (o.innerText || o.value || '').trim() === target;
-                        o.selected = m;
-                        if (m) hit = true;
-                    }
-                    return hit;
-                }""",
-                label,
-            )
-            if not found:
-                logger.error("requests.course_not_in_list label=%r", label)
-                raise RuntimeError(
-                    f"'{label}' was not in the available course list. "
-                    "Please reload courses and try again."
+        # The page's move_item() refuses greyed-out (closed / nothing
+        # available) courses and pops an alert. Capture it so the golfer gets
+        # the site's real reason instead of a generic failure; without a
+        # listener Playwright silently dismisses the alert.
+        alerts = []
+
+        def _on_dialog(dialog):
+            alerts.append(dialog.message)
+            dialog.accept()
+
+        page.on("dialog", _on_dialog)
+        try:
+            for label in course_choices:
+                # Select exactly this one option in lwin (by exact visible
+                # text), deselecting the rest, then click the page's own
+                # >> mover.
+                found = page.evaluate(
+                    """(target) => {
+                        const lwin = document.forms.f1.lwin;
+                        let hit = false;
+                        for (const o of lwin.options) {
+                            const m = (o.innerText || o.value || '').trim() === target;
+                            o.selected = m;
+                            if (m) hit = true;
+                        }
+                        return hit;
+                    }""",
+                    label,
                 )
-            move_btn.click()
+                if not found:
+                    logger.error("requests.course_not_in_list label=%r", label)
+                    raise RuntimeError(
+                        f"'{label}' was not in the available course list. "
+                        "Please reload courses and try again."
+                    )
+                before = page.evaluate("() => document.forms.f1.rwin.options.length")
+                move_btn.click()
+                page.wait_for_timeout(150)  # let move_item + any alert settle
+                after = page.evaluate("() => document.forms.f1.rwin.options.length")
+                if after <= before:
+                    reason = alerts[-1].strip() if alerts else (
+                        f"The Villages site would not add '{label}'."
+                    )
+                    logger.error("requests.move_refused label=%r alert=%r",
+                                 label, alerts[-1] if alerts else None)
+                    raise RuntimeError(
+                        f"{reason} Remove it from your course choices "
+                        "(or reload the course list) and try again."
+                    )
+        finally:
+            page.remove_listener("dialog", _on_dialog)
 
         # Verify rwin now holds every chosen course before finalizing.
         selected = page.evaluate(
@@ -1184,7 +1226,9 @@ class GolfService:
                 latest_time="",
                 preference="Course",
             )
-            courses = self._scrape_available_courses(page)
+            scraped = self._scrape_available_courses(page)
+            courses = scraped["open"]
+            closed_courses = scraped["closed"]
             # Return to a known-good main menu so the next request action starts
             # clean. The "Back to the Menu" link is unreliable and can strand the
             # session on an intermediate page (glf105b), so verify we actually
@@ -1197,7 +1241,8 @@ class GolfService:
             if "glf100" not in (page.url or "").lower():
                 self._login(page, tvn_username, tvn_password, golf_password)
             self._active.ts = _time.time()
-            return {"success": True, "courses": courses}
+            return {"success": True, "courses": courses,
+                    "closed_courses": closed_courses}
         except PWTimeout:
             self._close_active()
             return {"success": False, "error": _timeout_error()}

@@ -366,6 +366,9 @@
     .rq-course-chip .plus { color:var(--g3); font-weight:800; font-size:17px; line-height:1; }
     .rq-course-chip.added { background:var(--gl); border-color:var(--g3); color:var(--g2); }
     .rq-course-chip.added .plus { color:var(--g2); }
+    .rq-course-chip.closed { color:var(--muted); border-style:dashed; opacity:.65; cursor:default; }
+    .rq-course-chip.closed .tag { font-size:11px; font-weight:700; text-transform:uppercase;
+                                  letter-spacing:.4px; color:#b42318; }
     .rq-sel-list { display:flex; flex-direction:column; gap:8px; }
     .rq-sel-row { display:flex; align-items:center; gap:7px; background:var(--card);
       border:1.5px solid var(--gb); border-radius:12px; padding:8px 9px; }
@@ -768,7 +771,7 @@ let BUDDIES = [];  // populated from server after login
 const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'',allTimes:[],courseFilter:'all' };
 let MY_TEE_TIMES = [];
 let DELETE_PENDING = null;
-const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],selectedCourses:[],golfers:[],courseSearch:'' };
+const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],closedCourses:[],selectedCourses:[],golfers:[],courseSearch:'' };
 
 // ── Init: restore session on page load ──
 (async function init(){
@@ -1359,6 +1362,7 @@ async function loadRequestCourses(){
     const d=await r.json();
     if(d.success){
       SR.availableCourses=d.courses||[];
+      SR.closedCourses=d.closed_courses||[];
       SR.selectedCourses=[];
       SR.courseSearch='';
       const si=document.getElementById('rq-search'); if(si) si.value='';
@@ -1366,7 +1370,9 @@ async function loadRequestCourses(){
       rqRenderAvailable();
       rqRenderSelected();
       picker.style.display='block';
-      status.textContent=`Loaded ${SR.availableCourses.length} courses.`; status.style.color='var(--g2)';
+      const nClosed=SR.closedCourses.length;
+      status.textContent=`Loaded ${SR.availableCourses.length} open courses`+(nClosed?` (${nClosed} closed for this date)`:'')+'.';
+      status.style.color='var(--g2)';
     } else {
       status.textContent=d.error||'Could not load courses.'; status.style.color='#c0392b';
     }
@@ -1420,12 +1426,15 @@ function rqRenderAvailable(){
   const wrap=document.getElementById('rq-available');
   const q=SR.courseSearch||'';
   const list=q?SR.availableCourses.filter(c=>c.toLowerCase().includes(q)):SR.availableCourses;
-  if(!list.length){ wrap.innerHTML=`<div class="rq-sel-empty">No courses match &#8220;${esc(q)}&#8221;.</div>`; }
+  const closed=q?SR.closedCourses.filter(c=>c.toLowerCase().includes(q)):SR.closedCourses;
+  if(!list.length && !closed.length){ wrap.innerHTML=`<div class="rq-sel-empty">No courses match &#8220;${esc(q)}&#8221;.</div>`; }
   else{
     wrap.innerHTML=list.map(c=>{
       const added=SR.selectedCourses.includes(c);
       return `<button type="button" class="rq-course-chip${added?' added':''}" data-c="${esc(c)}" onclick="rqAddCourse(this.dataset.c)">${esc(c)} <span class="plus">${added?'✓':'+'}</span></button>`;
-    }).join('');
+    }).join('')+closed.map(c=>
+      `<span class="rq-course-chip closed">${esc(c)} <span class="tag">closed</span></span>`
+    ).join('');
   }
   rqRenderUsual();
   rqUpdateDoneBar();
