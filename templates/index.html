@@ -145,13 +145,15 @@
               transition:all .18s; flex-shrink:0; }
     .g-card.on .g-chk { background:var(--g3); border-color:var(--g3); color:#fff; }
 
-    .add-buddy-row { display:flex; gap:8px; margin-top:10px; }
-    .add-buddy-row input { flex:1; border:2px solid #dde8dd; border-radius:10px;
-                           padding:9px 12px; font-size:13px; outline:none;
+    .add-buddy-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .add-buddy-row input { flex:1 1 120px; min-width:0; border:2px solid #dde8dd; border-radius:10px;
+                           padding:11px 12px; font-size:15px; outline:none;
                            background:var(--card); color:var(--text); }
     .add-buddy-row input:focus { border-color:var(--g3); }
+    .add-buddy-row .add-buddy-btn { flex:1 1 100%; }
     .add-buddy-btn { background:var(--g3); color:#fff; border:none; border-radius:10px;
-                     padding:9px 14px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+                     padding:10px 14px; min-height:44px; font-size:14px; font-weight:700;
+                     cursor:pointer; white-space:nowrap; }
 
     .two { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
     .four { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; }
@@ -369,6 +371,7 @@
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h9a3.6 3.6 0 0 0 .3-7.2 5.2 5.2 0 0 0-10-1.2A3.4 3.4 0 0 0 7 18z"/></symbol>
   <symbol id="i-rain" viewBox="0 0 24 24"><path d="M7 15.5h9a3.6 3.6 0 0 0 .3-7.2 5.2 5.2 0 0 0-10-1.2A3.4 3.4 0 0 0 7 15.5z"/><path d="M9 18.5l-1 2.2M12.5 18.5l-1 2.2M16 18.5l-1 2.2"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
 </defs></svg>
 <div class="hdr">
   <div class="hdr-mark">VF</div>
@@ -461,7 +464,7 @@
   <div class="sec dim" id="sec-golfers">
     <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
       <div><div class="sec-title">Golfers</div><div class="sec-sub">Select everyone in your group</div></div>
-      <span class="lock-hint">&#128274; Pick a date first</span>
+      <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Pick a date first</span>
     </div>
     <div class="g-list" id="golferList"></div>
     <div class="add-buddy-row" id="addBuddyRow">
@@ -474,7 +477,7 @@
   <div class="sec dim" id="sec-course">
     <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-trophy"/></svg></div>
       <div><div class="sec-title">Course &amp; Guests</div><div class="sec-sub">Course type and guest info</div></div>
-      <span class="lock-hint">&#128274; Add golfers first</span>
+      <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Add golfers first</span>
     </div>
     <div class="two" style="margin-bottom:14px;">
       <div class="tile" id="t-exec" onclick="setCourse('Executive')">
@@ -508,7 +511,7 @@
   <div class="sec dim" id="sec-time">
     <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-clock"/></svg></div>
       <div><div class="sec-title">Time Preference</div><div class="sec-sub">When would you like to tee off?</div></div>
-      <span class="lock-hint">&#128274; Choose a course first</span>
+      <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Choose a course first</span>
     </div>
     <div class="time-grid five">
       <div class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico"><svg class="ic"><use href="#i-clock"/></svg></span><div class="t-lbl">Any Time</div><div class="t-range">&#183; Show all</div></div>
@@ -637,16 +640,16 @@
         <button class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()" style="margin-bottom:8px;">Load courses for selected date / type</button>
         <div id="rq-course-status" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
         <div id="rq-course-picker" style="display:none;">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="display:flex;flex-direction:column;gap:14px;">
             <div>
-              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Available</div>
-              <select id="rq-available" multiple size="10" style="width:100%;padding:6px;border:1px solid #d4d8df;border-radius:8px;"></select>
-              <button class="add-buddy-btn" onclick="rqAddCourse()" style="margin-top:6px;width:100%;">Add &#8594;</button>
+              <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:6px;">Available courses (tap to highlight, then Add)</div>
+              <select id="rq-available" multiple size="6" style="width:100%;min-width:0;padding:8px;font-size:15px;border:1px solid #d4d8df;border-radius:10px;"></select>
+              <button class="add-buddy-btn" onclick="rqAddCourse()" style="margin-top:8px;width:100%;">Add &#8594; to my choices</button>
             </div>
-            <div>
-              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Selected (in order)</div>
-              <select id="rq-selected" multiple size="10" style="width:100%;padding:6px;border:1px solid #d4d8df;border-radius:8px;"></select>
-              <div style="display:flex;gap:6px;margin-top:6px;">
+            <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;">
+              <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:6px;">Your course choices (in priority order)</div>
+              <select id="rq-selected" multiple size="5" style="width:100%;min-width:0;padding:8px;font-size:15px;border:1px solid var(--gb);border-radius:10px;background:var(--card);"></select>
+              <div style="display:flex;gap:6px;margin-top:8px;">
                 <button class="add-buddy-btn" onclick="rqMoveCourse(-1)" style="flex:1;">&#8593; Up</button>
                 <button class="add-buddy-btn" onclick="rqMoveCourse(1)" style="flex:1;">&#8595; Down</button>
                 <button class="add-buddy-btn" onclick="rqRemoveCourse()" style="flex:1;">Remove</button>
