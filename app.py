@@ -5,6 +5,7 @@ fetching tee times and booking via The Villages system.
 """
 
 import hmac
+import json
 import logging
 import os
 import queue
@@ -143,6 +144,7 @@ def _worker_public_error(action):
 # ── User store (SQLite) ─────────────────────────────────────────────────────
 # Self-contained local store — no external cloud dependency. See user_store.py.
 import user_store
+import request_watches
 
 # Fail fast at boot if credentials-at-rest encryption isn't configured, so we
 # never silently write cleartext Villages passwords/PINs to disk in production.
@@ -169,7 +171,7 @@ def _all_users():
 
 
 # ── Email notifications ──────────────────────────────────────────────────────
-from email_notifications import send_booking_confirmation, send_email
+from email_notifications import send_booking_confirmation, send_email, send_request_result
 
 
 # ── Operator alerting ─────────────────────────────────────────────────────────
@@ -360,6 +362,92 @@ def get_worker():
         if _worker is None or not _worker._thread.is_alive():
             _worker = GolfWorker()
     return _worker
+
+
+# ── Request-result watcher ────────────────────────────────────────────────────
+# The Villages assigns requests by a points lottery ~1 AM ET, 3 days before
+# play, and the golfer must check back to see if their request became a
+# reservation. This background loop runs those checks at the right time and
+# emails the outcome. Watches live in SQLite, so a restart loses nothing.
+_WATCH_INTERVAL_SECONDS = int(os.environ.get("REQUEST_WATCH_INTERVAL", "900"))  # 15 min
+
+
+def _notify_request_result(watch, result, reservation):
+    """Email a request outcome (fire-and-forget)."""
+    email = (watch.get("email") or "").strip()
+    if not email:
+        return
+    try:
+        courses = json.loads(watch.get("courses") or "[]")
+    except Exception:
+        courses = []
+    label = watch.get("play_date_label") or watch.get("play_date")
+
+    def _task():
+        try:
+            send_request_result(email, result, label, courses, reservation)
+            app.logger.info(
+                "request_watch.notified user=%s result=%s date=%s",
+                watch.get("username"), result, watch.get("play_date"),
+            )
+        except Exception as e:
+            app.logger.warning("request_watch.notify_error error=%s", e)
+
+    threading.Thread(target=_task, name="req-watch-email", daemon=True).start()
+
+
+def _run_due_request_checks():
+    """Check every watch whose assignment time has passed; notify the golfer."""
+    due = request_watches.due_watches()
+    if not due:
+        return
+    app.logger.info("request_watch.due count=%d", len(due))
+    for w in due:
+        user = _get_user(w["username"])
+        if not user:
+            request_watches.cancel_watch(w["id"])  # account gone
+            continue
+        result = get_worker().call(
+            "view_my_tee_times",
+            request_id="watch",
+            action="my_tee_times",
+            tvn_username=w["username"],
+            tvn_password=user["tvn_password"],
+            golf_password=user["golf_password"],
+        )
+        if not result.get("success"):
+            if request_watches.bump_attempt(w["id"]):  # retries exhausted
+                _notify_request_result(w, "unknown", None)
+            continue
+        reservations = result.get("reservations", []) or []
+        matched = next(
+            (r for r in reservations
+             if request_watches.reservation_matches(r.get("date"), w["play_date"])),
+            None,
+        )
+        if matched:
+            request_watches.mark_result(w["id"], "assigned", matched)
+            _notify_request_result(w, "assigned", matched)
+        else:
+            request_watches.mark_result(w["id"], "not_assigned", None)
+            _notify_request_result(w, "not_assigned", None)
+
+
+def _request_watch_loop():
+    time.sleep(30)  # let startup settle before the first pass
+    while True:
+        try:
+            _run_due_request_checks()
+        except Exception:
+            app.logger.exception("request_watch.loop_error")
+        time.sleep(_WATCH_INTERVAL_SECONDS)
+
+
+def _start_request_watcher():
+    if os.environ.get("DISABLE_REQUEST_WATCHER") == "1":
+        return
+    threading.Thread(target=_request_watch_loop, name="request-watcher", daemon=True).start()
+    app.logger.info("request_watch.started interval_s=%d", _WATCH_INTERVAL_SECONDS)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -783,6 +871,10 @@ def remove_user():
     if not username:
         return jsonify({"ok": False, "error": "No user selected."}), 400
     _delete_user(username)
+    try:
+        request_watches.cancel_watches_for_user(username)
+    except Exception:
+        pass
     session.clear()
     return jsonify({"ok": True})
 
@@ -1099,6 +1191,22 @@ def submit_request_route():
         course_choices=[str(c).strip() for c in course_choices if str(c).strip()],
         golfer_ids=[str(g).strip() for g in golfer_ids if str(g).strip()],
     )
+
+    # Auto-enroll the request for result notification: after the ~1 AM lottery
+    # (3 days before play) we'll check whether it was assigned and email the user.
+    if result.get("success"):
+        try:
+            request_watches.add_watch(
+                username=username,
+                request_no=result.get("request_no"),
+                play_date=play_date,
+                play_date_label=request_watches.friendly_date(play_date),
+                courses=course_choices,
+                email=_user_email(user),
+            )
+        except Exception as e:
+            app.logger.warning("request_watch.enroll_error request_id=%s error=%s", request_id, e)
+
     return jsonify(result)
 
 
@@ -1123,6 +1231,24 @@ def my_requests_route():
         tvn_password=user["tvn_password"],
         golf_password=user["golf_password"],
     )
+
+    # Enroll any pending request for result notification (covers requests the
+    # golfer submitted by phone or the Villages website, not just via the app).
+    if result.get("success"):
+        email = _user_email(user)
+        for req in result.get("requests", []) or []:
+            try:
+                request_watches.add_watch(
+                    username=username,
+                    request_no=req.get("request_id"),
+                    play_date=req.get("date"),
+                    play_date_label=request_watches.friendly_date(req.get("date")),
+                    courses=[],
+                    email=email,
+                )
+            except Exception:
+                pass
+
     return jsonify(result)
 
 
@@ -1160,6 +1286,12 @@ def delete_request_route():
 def logout():
     session.clear()
     return jsonify({"ok": True})
+
+
+# Start the request-result watcher at import so it runs under gunicorn too
+# (not just direct `python app.py`). Idempotent enough: one daemon per process,
+# and the worker runs --workers 1 so there is exactly one watcher.
+_start_request_watcher()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

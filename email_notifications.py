@@ -107,6 +107,64 @@ def send_email(recipient_email, subject, text_body, html_body=None):
         return False
 
 
+def send_request_result(recipient_email, result, play_date_label,
+                        courses=None, reservation=None):
+    """Notify a golfer of their tee-time request outcome after the nightly
+    assignment. `result` is 'assigned', 'not_assigned', or 'unknown'.
+    `reservation` (when assigned) is a dict with reservation_no/course/
+    display_time."""
+    date = play_date_label or "your requested date"
+    course_list = ", ".join(courses) if courses else ""
+
+    if result == "assigned" and reservation:
+        res_no = reservation.get("reservation_no", "")
+        course = reservation.get("course", "") or course_list
+        tee = reservation.get("display_time") or reservation.get("time") or ""
+        subject = f"Tee Time Assigned: {date}"
+        text = (
+            "Good news! Your tee-time request was assigned.\n\n"
+            f"Date: {date}\n"
+            f"Time: {tee}\n"
+            f"Course: {course}\n"
+            f"Reservation #{res_no}\n\n"
+            "See 'My Tee Times' in the app for details."
+        )
+        html = (
+            "<p><strong>Good news! Your tee-time request was assigned.</strong></p>"
+            f"<p>Date: {date}<br>Time: {tee}<br>Course: {course}<br>"
+            f"Reservation #{res_no}</p>"
+            "<p>See “My Tee Times” in the app for details.</p>"
+        )
+    elif result == "not_assigned":
+        subject = f"Tee Time Request Not Assigned: {date}"
+        text = (
+            f"Your tee-time request for {date} was not assigned this time.\n\n"
+            + (f"Courses requested: {course_list}\n\n" if course_list else "")
+            + "You can still reserve an open tee time 1 to 3 days before play, "
+            "either in the app (Book Tee Time) or by calling the golf shop."
+        )
+        html = (
+            f"<p>Your tee-time request for <strong>{date}</strong> was not "
+            "assigned this time.</p>"
+            + (f"<p>Courses requested: {course_list}</p>" if course_list else "")
+            + "<p>You can still reserve an open tee time 1 to 3 days before play, "
+            "either in the app (Book Tee Time) or by calling the golf shop.</p>"
+        )
+    else:  # unknown / error
+        subject = f"Could Not Check Your Tee Time Request: {date}"
+        text = (
+            f"We were unable to check whether your request for {date} was "
+            "assigned. Please check 'My Tee Times' in the app or call the golf "
+            "shop to confirm."
+        )
+        html = (
+            f"<p>We were unable to check whether your request for "
+            f"<strong>{date}</strong> was assigned. Please check "
+            "“My Tee Times” in the app or call the golf shop to confirm.</p>"
+        )
+    return send_email(recipient_email, subject, text, html)
+
+
 def send_booking_confirmation(recipient_email, reservation_no, course, display_time,
                               date_label, golfer_names):
     """Send a booking confirmation email."""
