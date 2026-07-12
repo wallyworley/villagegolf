@@ -378,6 +378,25 @@
     .rq-sel-btn:disabled { opacity:.3; }
     .rq-sel-btn.rm { color:#b42318; }
     .rq-sel-empty { font-size:14px; color:var(--muted); text-align:center; padding:6px 0; }
+    .rq-search { width:100%; padding:11px 14px; font-size:16px; border:1.5px solid var(--gb);
+                 border-radius:10px; background:var(--card); color:var(--text); box-sizing:border-box; }
+    .rq-usual { background:var(--card); border:1.5px dashed var(--g3); border-radius:12px;
+                padding:10px 12px; margin-bottom:12px; }
+    .rq-usual-lbl { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.5px; margin-bottom:6px; }
+    .rq-usual-btn { width:100%; border:1.5px solid var(--g3); background:var(--gl); color:var(--g2);
+                    border-radius:10px; padding:11px 12px; font-size:14px; font-weight:700;
+                    cursor:pointer; text-align:left; line-height:1.45; }
+    .rq-done-bar { position:sticky; bottom:10px; margin-top:14px; z-index:5; }
+    .rq-done-bar button { width:100%; border:none; border-radius:12px; background:var(--g2); color:#fff;
+                          font-size:16px; font-weight:800; padding:14px;
+                          box-shadow:0 6px 18px rgba(14,61,33,.35); cursor:pointer; }
+    .crs-bar { display:none; flex-wrap:wrap; gap:7px; margin:0 0 12px; }
+    .crs-chip { border:1.5px solid var(--gb); background:var(--card); color:var(--text);
+                border-radius:999px; padding:8px 13px; font-size:14px; font-weight:600; cursor:pointer; }
+    .crs-chip .n { color:var(--muted); font-weight:700; margin-left:3px; }
+    .crs-chip.on { background:var(--g2); border-color:var(--g2); color:#fff; }
+    .crs-chip.on .n { color:rgba(255,255,255,.75); }
   </style>
 </head>
 <body>
@@ -567,6 +586,7 @@
 
   <div class="sec" id="results-sec">
     <div class="res-header" id="res-header">Available Tee Times</div>
+    <div class="crs-bar" id="crs-bar"></div>
     <div class="time-list" id="timeList"></div>
   </div>
 
@@ -668,19 +688,27 @@
         <button class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()" style="margin-bottom:8px;">Load courses for selected date / type</button>
         <div id="rq-course-status" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
         <div id="rq-course-picker" style="display:none;">
-          <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:8px;">Tap a course to add it to your choices</div>
-          <div class="rq-avail-wrap" id="rq-available"></div>
-          <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;margin-top:14px;">
+          <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;margin-bottom:14px;">
             <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:8px;">Your course choices (in priority order)</div>
             <div class="rq-sel-list" id="rq-selected"></div>
           </div>
+          <div id="rq-browse">
+            <div class="rq-usual" id="rq-usual" style="display:none;"></div>
+            <input id="rq-search" class="rq-search" type="search" placeholder="Search courses&#8230;" autocomplete="off" oninput="rqSearchChanged()"/>
+            <div style="font-size:13px;font-weight:700;color:var(--muted);margin:10px 0 8px;">Tap a course to add it to your choices</div>
+            <div class="rq-avail-wrap" id="rq-available"></div>
+            <div class="rq-done-bar" id="rq-done-bar" style="display:none;">
+              <button type="button" onclick="rqDone()">Done: choose golfers <span id="rq-done-count"></span></button>
+            </div>
+          </div>
+          <button type="button" class="add-buddy-btn" id="rq-reopen-btn" onclick="rqReopen()" style="display:none;margin-top:4px;">Change courses</button>
         </div>
       </div>
 
     </div>
 
     <!-- Card 3: Golfers & submit -->
-    <div class="sec" style="margin-top:14px;">
+    <div class="sec" id="rq-golfers-sec" style="margin-top:14px;">
       <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
         <div><div class="sec-title">Golfers</div><div class="sec-sub">Up to 4 players in this request</div></div>
       </div>
@@ -737,10 +765,10 @@ function esc(s){ const d=document.createElement('div'); d.textContent=String(s);
 
 // ── State ──
 let BUDDIES = [];  // populated from server after login
-const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'' };
+const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'',allTimes:[],courseFilter:'all' };
 let MY_TEE_TIMES = [];
 let DELETE_PENDING = null;
-const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],selectedCourses:[],golfers:[] };
+const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],selectedCourses:[],golfers:[],courseSearch:'' };
 
 // ── Init: restore session on page load ──
 (async function init(){
@@ -1146,16 +1174,33 @@ async function fetchTimes(){
 }
 
 function renderTimes(times,label){
-  const sec=document.getElementById('results-sec'); const list=document.getElementById('timeList');
-  list.innerHTML=''; sec.style.display='block';
+  const sec=document.getElementById('results-sec');
+  S.allTimes=times||[]; S.courseFilter='all';
+  sec.style.display='block';
   document.getElementById('res-header').textContent=`Available Times \u00b7 ${label}`;
-  if(!times||times.length===0){ list.innerHTML='<div class="no-times">No tee times found for that preference.<br>Try a different time or date.</div>'; return; }
+  renderCourseBar(); renderTimeRows();
+  sec.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function renderCourseBar(){
+  const bar=document.getElementById('crs-bar');
+  const counts={};
+  S.allTimes.forEach(t=>{ counts[t.course]=(counts[t.course]||0)+1; });
+  const names=Object.keys(counts).sort();
+  if(names.length<2){ bar.style.display='none'; bar.innerHTML=''; return; }
+  bar.style.display='flex';
+  bar.innerHTML=`<button type="button" class="crs-chip${S.courseFilter==='all'?' on':''}" onclick="setCourseFilter('all')">All courses <span class="n">${S.allTimes.length}</span></button>`+
+    names.map(c=>`<button type="button" class="crs-chip${S.courseFilter===c?' on':''}" data-c="${esc(c)}" onclick="setCourseFilter(this.dataset.c)">${esc(c)} <span class="n">${counts[c]}</span></button>`).join('');
+}
+function setCourseFilter(c){ S.courseFilter=c; renderCourseBar(); renderTimeRows(); }
+function renderTimeRows(){
+  const list=document.getElementById('timeList'); list.innerHTML='';
+  const times=S.courseFilter==='all'?S.allTimes:S.allTimes.filter(t=>t.course===S.courseFilter);
+  if(times.length===0){ list.innerHTML='<div class="no-times">No tee times found for that preference.<br>Try a different time or date.</div>'; return; }
   times.forEach(t=>{
     const row=document.createElement('div'); row.className='time-row';
     row.innerHTML=`<div><div class="tr-time">${esc(t.display_time)}</div><div class="tr-course">${esc(t.course)}</div></div><div class="tr-avail">${esc(t.available)} open</div>`;
     row.onclick=()=>openConfirm(t); list.appendChild(row);
   });
-  sec.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 function openConfirm(t){
@@ -1315,6 +1360,9 @@ async function loadRequestCourses(){
     if(d.success){
       SR.availableCourses=d.courses||[];
       SR.selectedCourses=[];
+      SR.courseSearch='';
+      const si=document.getElementById('rq-search'); if(si) si.value='';
+      rqReopen();
       rqRenderAvailable();
       rqRenderSelected();
       picker.style.display='block';
@@ -1324,16 +1372,68 @@ async function loadRequestCourses(){
     }
   } catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
 }
+function rqRecentsKey(){ return 'vf_usual_courses_'+(SR.course||''); }
+function rqGetRecents(){
+  try{ const v=JSON.parse(localStorage.getItem(rqRecentsKey())||'[]'); return Array.isArray(v)?v:[]; }
+  catch(e){ return []; }
+}
+function rqSaveRecents(){
+  try{ localStorage.setItem(rqRecentsKey(), JSON.stringify(SR.selectedCourses.slice(0,8))); }catch(e){}
+}
+function rqSearchChanged(){
+  SR.courseSearch=document.getElementById('rq-search').value.trim().toLowerCase();
+  rqRenderAvailable();
+}
+function rqRenderUsual(){
+  const box=document.getElementById('rq-usual');
+  if(!box) return;
+  const usual=rqGetRecents().filter(c=>SR.availableCourses.includes(c));
+  if(!usual.length || SR.selectedCourses.length){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  box.innerHTML='<div class="rq-usual-lbl">From your last request</div>'+
+    `<button type="button" class="rq-usual-btn" onclick="rqUseUsual()">Use my usual picks: ${usual.map(esc).join(' &#8594; ')}</button>`;
+}
+function rqUseUsual(){
+  const usual=rqGetRecents().filter(c=>SR.availableCourses.includes(c));
+  if(!usual.length) return;
+  SR.selectedCourses=usual.slice();
+  rqRenderAvailable(); rqRenderSelected();
+}
+function rqUpdateDoneBar(){
+  const bar=document.getElementById('rq-done-bar');
+  if(!bar) return;
+  const n=SR.selectedCourses.length;
+  bar.style.display=n?'block':'none';
+  const c=document.getElementById('rq-done-count'); if(c) c.textContent='('+n+')';
+}
+function rqDone(){
+  document.getElementById('rq-browse').style.display='none';
+  document.getElementById('rq-reopen-btn').style.display='block';
+  const g=document.getElementById('rq-golfers-sec');
+  if(g) g.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function rqReopen(){
+  document.getElementById('rq-browse').style.display='block';
+  document.getElementById('rq-reopen-btn').style.display='none';
+}
 function rqRenderAvailable(){
   const wrap=document.getElementById('rq-available');
-  wrap.innerHTML=SR.availableCourses.map(c=>{
-    const added=SR.selectedCourses.includes(c);
-    return `<button type="button" class="rq-course-chip${added?' added':''}" data-c="${esc(c)}" onclick="rqAddCourse(this.dataset.c)">${esc(c)} <span class="plus">${added?'✓':'+'}</span></button>`;
-  }).join('');
+  const q=SR.courseSearch||'';
+  const list=q?SR.availableCourses.filter(c=>c.toLowerCase().includes(q)):SR.availableCourses;
+  if(!list.length){ wrap.innerHTML=`<div class="rq-sel-empty">No courses match &#8220;${esc(q)}&#8221;.</div>`; }
+  else{
+    wrap.innerHTML=list.map(c=>{
+      const added=SR.selectedCourses.includes(c);
+      return `<button type="button" class="rq-course-chip${added?' added':''}" data-c="${esc(c)}" onclick="rqAddCourse(this.dataset.c)">${esc(c)} <span class="plus">${added?'✓':'+'}</span></button>`;
+    }).join('');
+  }
+  rqRenderUsual();
+  rqUpdateDoneBar();
 }
 function rqRenderSelected(){
   const box=document.getElementById('rq-selected');
-  if(!SR.selectedCourses.length){ box.innerHTML='<div class="rq-sel-empty">No courses added yet. Tap one above.</div>'; return; }
+  rqUpdateDoneBar();
+  if(!SR.selectedCourses.length){ box.innerHTML='<div class="rq-sel-empty">No courses added yet. Tap one below.</div>'; return; }
   const last=SR.selectedCourses.length-1;
   box.innerHTML=SR.selectedCourses.map((c,i)=>
     `<div class="rq-sel-row"><span class="rq-sel-num">${i+1}</span>`+
@@ -1388,6 +1488,7 @@ async function submitRequest(){
     const r=await fetch('/api/submit-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const d=await r.json();
     if(d.success){
+      rqSaveRecents();
       status.textContent='✅ '+(d.message||('Request #'+(d.request_no||'submitted')));
       status.style.color='var(--g2)';
       loadMyRequests();
