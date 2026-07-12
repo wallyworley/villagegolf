@@ -612,18 +612,18 @@
         <label class="sw"><input type="checkbox" id="rq-anycourse"/><span class="sw-track"></span></label>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
-        <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Time to Play</label>
-          <input id="rq-time" type="text" placeholder="12:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+        <div style="grid-column:1 / -1;">
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preferred time to play</label>
+          <input id="rq-time" type="time" value="08:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
         <div>
           <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Earliest</label>
-          <input id="rq-earliest" type="text" placeholder="9:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+          <input id="rq-earliest" type="time" value="07:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
         <div>
           <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Latest</label>
-          <input id="rq-latest" type="text" placeholder="1:00" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;"/>
+          <input id="rq-latest" type="time" value="13:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
       </div>
 
