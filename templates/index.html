@@ -353,6 +353,10 @@
 
     /* Native date/time inputs must not overflow their card on iOS Safari */
     input[type="date"], input[type="time"] { max-width:100%; min-width:0; box-sizing:border-box; }
+    /* Keep the native date/time spinner internals from spilling past the field box on mobile */
+    input[type="date"]::-webkit-datetime-edit, input[type="time"]::-webkit-datetime-edit { padding:0; }
+    input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+    input[type="time"]::-webkit-datetime-edit-fields-wrapper { min-width:0; }
 
     /* Requests course picker: tap-to-add chips + a reorderable list */
     .rq-avail-wrap { display:flex; flex-wrap:wrap; gap:8px; }
@@ -636,17 +640,17 @@
         <label class="sw"><input type="checkbox" id="rq-anycourse"/><span class="sw-track"></span></label>
       </div>
 
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-bottom:14px;">
-        <div style="grid-column:1 / -1;">
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;">
+        <div>
           <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preferred time to play</label>
           <input id="rq-time" type="time" value="08:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
         <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Earliest</label>
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Earliest time OK</label>
           <input id="rq-earliest" type="time" value="07:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
         <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Latest</label>
+          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Latest time OK</label>
           <input id="rq-latest" type="time" value="13:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
         </div>
       </div>
