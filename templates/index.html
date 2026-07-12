@@ -2,25 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-  <meta name="theme-color" content="#1a5c2a"/>
-  <title>Villages Golf</title>
+  <meta name="theme-color" content="#14532d"/>
+  <title>Village Fairways</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --g1: #0e3d1c; --g2: #1a5c2a; --g3: #2d8a47;
-      --gl: #f0f9f2; --gb: #c8e6d0;
-      --bg: #f2f5f2; --card: #fff; --text: #1a2e1a; --muted: #6b7c6b;
-      --r: 16px; --shadow: 0 2px 12px rgba(0,0,0,0.08);
+      --g1: #0e3d21; --g2: #14532d; --g3: #2f6b45;
+      --gl: #e9f1ea; --gb: #cfe0d4; --brass: #b3872f;
+      --bg: #f3f6f1; --card: #fff; --text: #16211a; --muted: #55615a;
+      --r: 16px; --shadow: 0 2px 14px rgba(20,40,28,0.09);
     }
+    /* Icon set: line icons in the brand green, replacing emoji. */
+    .ic { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:2;
+          stroke-linecap:round; stroke-linejoin:round; display:block; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 48px; }
 
     .hdr { background: linear-gradient(160deg,var(--g1),var(--g2) 55%,var(--g3));
            color:#fff; padding:28px 20px 22px; text-align:center; }
-    .hdr-icon { font-size:36px; margin-bottom:6px; }
+    .hdr-mark { width:52px; height:52px; margin:0 auto 8px; border-radius:15px;
+                background:#f4f8f2; color:var(--g2); display:flex; align-items:center;
+                justify-content:center; font-weight:800; font-size:21px; letter-spacing:.5px; }
     .hdr h1 { font-size:23px; font-weight:800; letter-spacing:-.5px; }
     .hdr .sub { font-size:12px; opacity:.78; margin-top:3px; }
     .hdr .badge { display:inline-flex; align-items:center; gap:6px;
@@ -306,21 +311,68 @@
     .switch-user:hover { color:var(--g3); }
 
     @media (prefers-color-scheme:dark) {
-      :root { --bg:#101e10; --card:#1a2e1a; --text:#e8f5e8; --muted:#8faa8f;
-              --gl:#1e3d22; --gb:#2d5235; --shadow:0 2px 12px rgba(0,0,0,.3); }
+      :root { --bg:#0f130d; --card:#191e17; --text:#e9efe7; --muted:#9aa69c;
+              --g2:#2f6b45; --g3:#5a9a72; --gl:#1c2a1e; --gb:#2a3a2c; --brass:#d0a659;
+              --shadow:0 2px 14px rgba(0,0,0,.4); }
       .d-card,.g-card,.tile,.t-tile,.time-row,.u-card { border-color:#2a422a; }
       .new-user-card { border-color:#2a422a; }
       .cs-cancel,.again-btn,.reg-cancel { background:#2a3a2a; color:var(--text); }
       .err-banner { background:#3d1010; border-color:#7a2020; color:#f08080; }
       .reg-field input,.add-buddy-row input,.contact-input { border-color:#2a422a; }
     }
+    /* ── Refined direction: line icons, solid selection, brass accents ── */
+    .sec-icon .ic { width:19px; height:19px; color:var(--g2); }
+    .tile-ico { display:flex; align-items:center; justify-content:center; margin-bottom:6px; }
+    .tile-ico .ic { width:26px; height:26px; color:var(--g2); }
+    .t-ico { display:flex; align-items:center; justify-content:center; }
+    .t-ico .ic { width:23px; height:23px; color:var(--g2); }
+    .success-icon .ic { width:60px; height:60px; margin:0 auto; color:var(--g2); }
+
+    /* Bold, solid selected states (was a faint tint) */
+    .tile.on, .t-tile.on, .d-card.on, .g-card.on {
+      background:var(--g2); border-color:var(--g2); color:#fff; box-shadow:none;
+    }
+    .tile.on .tile-lbl, .t-tile.on .t-lbl,
+    .d-card.on .d-dow, .d-card.on .d-num,
+    .g-card.on .g-name { color:#fff; }
+    .tile.on .tile-sub, .t-tile.on .t-range,
+    .d-card.on .d-mon, .d-card.on .d-wx,
+    .g-card.on .g-id { color:#fff; opacity:.82; }
+    .tile.on .tile-ico .ic, .t-tile.on .t-ico .ic,
+    .d-card.on .d-wx-icon .ic { color:#fff; }
+    .g-card.on .g-av { background:var(--brass); color:#241a04; }
+    .g-card.on .g-chk { background:#fff; border-color:#fff; color:var(--g2); }
+
+    /* Weather glyph on date cards */
+    .d-wx-icon .ic { width:15px; height:15px; display:inline-block; vertical-align:-3px; color:var(--g2); }
+
+    /* Brass underline on the active tab */
+    .app-tab.active { box-shadow:0 4px 14px rgba(20,60,35,.22), inset 0 -3px 0 var(--brass); }
   </style>
 </head>
 <body>
 
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="16" rx="2.6"/><path d="M3 9.5h18M8 3v3M16 3v3"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5.5 20c0-3.6 2.9-6.2 6.5-6.2S18.5 16.4 18.5 20"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M7.5 4.5h9V8a4.5 4.5 0 0 1-9 0z"/><path d="M7.5 6H5.2v.7A3 3 0 0 0 8 9.6M16.5 6h2.3v.7a3 3 0 0 1-2.8 2.9"/><path d="M12 12.4V16M9 19.5h6M10.1 19.5l.5-3.5M13.9 19.5l-.5-3.5"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M7 21V4M7 5.2l8.4 2.6L7 10.4"/><ellipse cx="7" cy="21" rx="4.6" ry="1.4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.2 1.9"/></symbol>
+  <symbol id="i-sunrise" viewBox="0 0 24 24"><path d="M4 18.5h16M7.5 18.5a4.5 4.5 0 0 1 9 0"/><path d="M12 4.5v2.6M4.9 10.4l1.5 1.3M19.1 10.4l-1.5 1.3M2.5 21.5h19"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2.3M12 18.7V21M3 12h2.3M18.7 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></symbol>
+  <symbol id="i-cloudsun" viewBox="0 0 24 24"><circle cx="8.5" cy="8" r="3"/><path d="M8.5 1.8v1.5M2.9 8H1.4M4.4 3.9 3.2 2.7M13 8.1l1-1"/><path d="M9 20h8a3.4 3.4 0 0 0 .3-6.8 4.8 4.8 0 0 0-9.1-.9A3.2 3.2 0 0 0 9 20z"/></symbol>
+  <symbol id="i-sunset" viewBox="0 0 24 24"><path d="M4 18.5h16M7.5 18.5a4.5 4.5 0 0 1 9 0"/><path d="M12 9V4M9.4 6.6 12 4l2.6 2.6M2.5 21.5h19"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M4 7l8 5.5L20 7"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6.5 3h6.5l4.5 4.5V20a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v4.5h4.5M8.5 13h7M8.5 16.5h5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><rect x="5" y="4.5" width="14" height="16.5" rx="2.5"/><rect x="8.5" y="2.6" width="7" height="3.6" rx="1.2"/><path d="M8.5 11h7M8.5 14.5h5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.4l2.7 2.7L16 9.5"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h9a3.6 3.6 0 0 0 .3-7.2 5.2 5.2 0 0 0-10-1.2A3.4 3.4 0 0 0 7 18z"/></symbol>
+  <symbol id="i-rain" viewBox="0 0 24 24"><path d="M7 15.5h9a3.6 3.6 0 0 0 .3-7.2 5.2 5.2 0 0 0-10-1.2A3.4 3.4 0 0 0 7 15.5z"/><path d="M9 18.5l-1 2.2M12.5 18.5l-1 2.2M16 18.5l-1 2.2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></symbol>
+</defs></svg>
 <div class="hdr">
-  <div class="hdr-icon">&#9971;</div>
-  <h1>Villages Golf</h1>
+  <div class="hdr-mark">VF</div>
+  <h1>Village Fairways</h1>
   <p class="sub">Tee Time Booking</p>
   <div class="badge" id="hdr-badge" style="display:none"></div>
 </div>
@@ -400,14 +452,14 @@
 
   <div class="app-view active" id="view-book">
   <div class="sec" id="sec-date">
-    <div class="sec-hdr"><div class="sec-icon">&#128197;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-cal"/></svg></div>
       <div><div class="sec-title">Play Date</div><div class="sec-sub">Select when you'd like to play</div></div>
     </div>
     <div class="date-grid" id="dateGrid"></div>
   </div>
 
   <div class="sec dim" id="sec-golfers">
-    <div class="sec-hdr"><div class="sec-icon">&#127948;&#65039;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
       <div><div class="sec-title">Golfers</div><div class="sec-sub">Select everyone in your group</div></div>
       <span class="lock-hint">&#128274; Pick a date first</span>
     </div>
@@ -420,16 +472,16 @@
   </div>
 
   <div class="sec dim" id="sec-course">
-    <div class="sec-hdr"><div class="sec-icon">&#127942;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-trophy"/></svg></div>
       <div><div class="sec-title">Course &amp; Guests</div><div class="sec-sub">Course type and guest info</div></div>
       <span class="lock-hint">&#128274; Add golfers first</span>
     </div>
     <div class="two" style="margin-bottom:14px;">
       <div class="tile" id="t-exec" onclick="setCourse('Executive')">
-        <div class="tile-ico">&#128994;</div><div class="tile-lbl">Executive</div><div class="tile-sub">Shorter course</div>
+        <div class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></div><div class="tile-lbl">Executive</div><div class="tile-sub">Shorter course</div>
       </div>
       <div class="tile" id="t-champ" onclick="setCourse('Championship')">
-        <div class="tile-ico">&#127942;</div><div class="tile-lbl">Championship</div><div class="tile-sub">Full 18 holes</div>
+        <div class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></div><div class="tile-lbl">Championship</div><div class="tile-sub">Full 18 holes</div>
       </div>
     </div>
     <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Region</div>
@@ -454,16 +506,16 @@
   </div>
 
   <div class="sec dim" id="sec-time">
-    <div class="sec-hdr"><div class="sec-icon">&#9200;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-clock"/></svg></div>
       <div><div class="sec-title">Time Preference</div><div class="sec-sub">When would you like to tee off?</div></div>
       <span class="lock-hint">&#128274; Choose a course first</span>
     </div>
     <div class="time-grid five">
-      <div class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico">&#128196;</span><div class="t-lbl">Any Time</div><div class="t-range">&#183; Show all</div></div>
-      <div class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico">&#127749;</span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
-      <div class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico">&#9728;&#65039;</span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
-      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico">&#127780;&#65039;</span><div class="t-lbl">Midday</div><div class="t-range">Noon &#8211; 2pm</div></div>
-      <div class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico">&#127751;</span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
+      <div class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico"><svg class="ic"><use href="#i-clock"/></svg></span><div class="t-lbl">Any Time</div><div class="t-range">&#183; Show all</div></div>
+      <div class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunrise"/></svg></span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
+      <div class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico"><svg class="ic"><use href="#i-sun"/></svg></span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
+      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-cloudsun"/></svg></span><div class="t-lbl">Midday</div><div class="t-range">Noon &#8211; 2pm</div></div>
+      <div class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunset"/></svg></span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
     </div>
   </div>
 
@@ -471,7 +523,7 @@
 
   <div class="sec dim" id="sec-fetch">
     <button class="fetch-btn" id="fetchBtn" onclick="fetchTimes()" disabled>
-      &#128270; Find Available Tee Times
+      <svg class="ic" style="display:inline-block;vertical-align:-5px;margin-right:3px"><use href="#i-search"/></svg> Find Available Tee Times
     </button>
   </div>
 
@@ -488,15 +540,15 @@
   </div>
 
   <div class="sec" id="success-sec">
-    <div class="success-icon">&#127881;</div>
+    <div class="success-icon"><svg class="ic"><use href="#i-check"/></svg></div>
     <div class="success-title">Tee Time Booked!</div>
     <div class="success-sub" id="success-sub"></div>
     <div class="conf-card" id="conf-card"></div>
-    <button class="again-btn" onclick="resetApp()">&#9971; Book Another Time</button>
+    <button class="again-btn" onclick="resetApp()">Book Another Time</button>
   </div>
 
   <div class="sec" id="sec-contact">
-    <div class="sec-hdr"><div class="sec-icon">&#128231;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-mail"/></svg></div>
       <div><div class="sec-title">Email Notifications</div><div class="sec-sub">Get booking confirmations by email</div></div>
     </div>
     <div class="contact-row">
@@ -509,7 +561,7 @@
 
   <div class="app-view" id="view-mytimes">
   <div class="sec" id="sec-my-times">
-    <div class="sec-hdr"><div class="sec-icon">&#128221;</div>
+    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-doc"/></svg></div>
       <div><div class="sec-title">My Tee Times</div><div class="sec-sub">View your current reservations</div></div>
     </div>
     <button class="mytimes-btn" id="myTimesBtn" onclick="loadMyTeeTimes()">View My Tee Times</button>
@@ -520,7 +572,7 @@
 
   <div class="app-view" id="view-request">
     <div class="sec">
-      <div class="sec-hdr"><div class="sec-icon">&#128221;</div>
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-doc"/></svg></div>
         <div><div class="sec-title">New Tee Time Request</div><div class="sec-sub">Submit a request with your preferences</div></div>
       </div>
 
@@ -542,8 +594,8 @@
       <div style="margin-bottom:14px;">
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Type</label>
         <div class="two">
-          <div class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><div class="tile-ico">&#128994;</div><div class="tile-lbl">Executive</div></div>
-          <div class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><div class="tile-ico">&#127942;</div><div class="tile-lbl">Championship</div></div>
+          <div class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><div class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></div><div class="tile-lbl">Executive</div></div>
+          <div class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><div class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></div><div class="tile-lbl">Championship</div></div>
         </div>
       </div>
 
@@ -608,19 +660,19 @@
 
     <!-- Card 3: Golfers & submit -->
     <div class="sec" style="margin-top:14px;">
-      <div class="sec-hdr"><div class="sec-icon">&#127948;&#65039;</div>
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
         <div><div class="sec-title">Golfers</div><div class="sec-sub">Up to 4 players in this request</div></div>
       </div>
       <div class="g-list" id="rq-golfer-list"></div>
 
       <div class="err-banner" id="rq-err" style="margin-top:14px;"></div>
       <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()" style="margin-top:14px;">Submit Request</button>
-      <div style="font-size:13px;color:var(--g2);margin-top:8px;text-align:center;line-height:1.4;">&#9993;&#65039; We'll email you after the nightly assignment (around 1 AM, 3 days before play) to tell you whether your request came through, so you don't have to keep checking.</div>
+      <div style="font-size:13px;color:var(--g2);margin-top:8px;text-align:center;line-height:1.4;">We'll email you after the nightly assignment (around 1 AM, 3 days before play) to tell you whether your request came through, so you don't have to keep checking.</div>
       <div class="contact-status" id="rq-status" style="margin-top:10px;"></div>
     </div>
 
     <div class="sec" style="margin-top:18px;">
-      <div class="sec-hdr"><div class="sec-icon">&#128203;</div>
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-list"/></svg></div>
         <div><div class="sec-title">My Open Requests</div><div class="sec-sub">Pending tee-time requests</div></div>
       </div>
       <button class="mytimes-btn" onclick="loadMyRequests()">Refresh My Requests</button>
@@ -642,7 +694,7 @@
     <div class="cs-detail" id="cs-detail"></div>
     <div class="cs-btns">
       <button class="cs-cancel" onclick="closeConfirm()">Cancel</button>
-      <button class="cs-book" id="cs-book-btn" onclick="confirmBook()">&#9971; Book It!</button>
+      <button class="cs-book" id="cs-book-btn" onclick="confirmBook()">Book It!</button>
     </div>
   </div>
 </div>
@@ -778,7 +830,7 @@ async function registerUser(){
 // ── Header ──
 function updateHeader(name, primary){
   const badge=document.getElementById('hdr-badge');
-  badge.innerHTML=`&#127948;&#65039; ${esc(name)}`;
+  badge.innerHTML=`<svg class="ic"><use href="#i-person"/></svg> ${esc(name)}`;
   badge.style.display='inline-flex';
 }
 
@@ -925,13 +977,13 @@ async function confirmDeleteReservation(){
 
 // ── Build dates ──
 // ── Weather helpers ──
-const WX_ICONS={0:'\u2600\uFE0F',1:'\uD83C\uDF24\uFE0F',2:'\u26C5',3:'\u2601\uFE0F',
-  45:'\uD83C\uDF2B\uFE0F',48:'\uD83C\uDF2B\uFE0F',
-  51:'\uD83C\uDF26\uFE0F',53:'\uD83C\uDF26\uFE0F',55:'\uD83C\uDF27\uFE0F',
-  61:'\uD83C\uDF27\uFE0F',63:'\uD83C\uDF27\uFE0F',65:'\uD83C\uDF27\uFE0F',
-  71:'\uD83C\uDF28\uFE0F',73:'\uD83C\uDF28\uFE0F',75:'\uD83C\uDF28\uFE0F',
-  80:'\uD83C\uDF26\uFE0F',81:'\uD83C\uDF27\uFE0F',82:'\uD83C\uDF27\uFE0F',
-  95:'\u26C8\uFE0F',96:'\u26C8\uFE0F',99:'\u26C8\uFE0F'};
+const WX_ICONS={0:'i-sun',1:'i-cloudsun',2:'i-cloudsun',3:'i-cloud',
+  45:'i-cloud',48:'i-cloud',
+  51:'i-rain',53:'i-rain',55:'i-rain',
+  61:'i-rain',63:'i-rain',65:'i-rain',
+  71:'i-cloud',73:'i-cloud',75:'i-cloud',
+  80:'i-cloudsun',81:'i-rain',82:'i-rain',
+  95:'i-rain',96:'i-rain',99:'i-rain'};
 const WX_LABELS={0:'Sunny',1:'Mostly sunny',2:'Partly cloudy',3:'Cloudy',
   45:'Foggy',48:'Foggy',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
   61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',75:'Heavy snow',
@@ -978,9 +1030,9 @@ function buildDates(){
       const el=document.getElementById('wx-'+iso);
       const w=wx[iso];
       if(el&&w){
-        const icon=WX_ICONS[w.code]||'\u2600\uFE0F';
+        const icon=WX_ICONS[w.code]||'i-sun';
         const lbl=WX_LABELS[w.code]||'';
-        el.innerHTML=`<span class="d-wx-icon">${icon}</span> <span class="d-wx-temp">${w.hi}\u00B0/${w.lo}\u00B0</span><br>${lbl}`;
+        el.innerHTML=`<span class="d-wx-icon"><svg class="ic"><use href="#${icon}"/></svg></span> <span class="d-wx-temp">${w.hi}\u00B0/${w.lo}\u00B0</span><br>${lbl}`;
       }
     });
   });
