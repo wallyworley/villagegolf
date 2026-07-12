@@ -350,6 +350,30 @@
 
     /* Brass underline on the active tab */
     .app-tab.active { box-shadow:0 4px 14px rgba(20,60,35,.22), inset 0 -3px 0 var(--brass); }
+
+    /* Native date/time inputs must not overflow their card on iOS Safari */
+    input[type="date"], input[type="time"] { max-width:100%; min-width:0; box-sizing:border-box; }
+
+    /* Requests course picker: tap-to-add chips + a reorderable list */
+    .rq-avail-wrap { display:flex; flex-wrap:wrap; gap:8px; }
+    .rq-course-chip { border:1.5px solid var(--gb); background:var(--card); border-radius:999px;
+      padding:10px 14px; min-height:44px; font-size:14px; font-weight:600; color:var(--text);
+      cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:100%; }
+    .rq-course-chip .plus { color:var(--g3); font-weight:800; font-size:17px; line-height:1; }
+    .rq-course-chip.added { background:var(--gl); border-color:var(--g3); color:var(--g2); }
+    .rq-course-chip.added .plus { color:var(--g2); }
+    .rq-sel-list { display:flex; flex-direction:column; gap:8px; }
+    .rq-sel-row { display:flex; align-items:center; gap:7px; background:var(--card);
+      border:1.5px solid var(--gb); border-radius:12px; padding:8px 9px; }
+    .rq-sel-num { width:26px; height:26px; flex:none; border-radius:50%; background:var(--g2);
+      color:#fff; font-size:13px; font-weight:800; display:grid; place-items:center; }
+    .rq-sel-name { flex:1; min-width:0; font-size:14px; font-weight:600; line-height:1.3; }
+    .rq-sel-btn { width:38px; height:38px; flex:none; border:1px solid var(--gb);
+      background:var(--card); border-radius:10px; font-size:17px; font-weight:700;
+      color:var(--g2); cursor:pointer; display:grid; place-items:center; }
+    .rq-sel-btn:disabled { opacity:.3; }
+    .rq-sel-btn.rm { color:#b42318; }
+    .rq-sel-empty { font-size:14px; color:var(--muted); text-align:center; padding:6px 0; }
   </style>
 </head>
 <body>
@@ -612,7 +636,7 @@
         <label class="sw"><input type="checkbox" id="rq-anycourse"/><span class="sw-track"></span></label>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-bottom:14px;">
         <div style="grid-column:1 / -1;">
           <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preferred time to play</label>
           <input id="rq-time" type="time" value="08:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
@@ -640,21 +664,11 @@
         <button class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()" style="margin-bottom:8px;">Load courses for selected date / type</button>
         <div id="rq-course-status" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
         <div id="rq-course-picker" style="display:none;">
-          <div style="display:flex;flex-direction:column;gap:14px;">
-            <div>
-              <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:6px;">Available courses (tap to highlight, then Add)</div>
-              <select id="rq-available" multiple size="6" style="width:100%;min-width:0;padding:8px;font-size:15px;border:1px solid #d4d8df;border-radius:10px;"></select>
-              <button class="add-buddy-btn" onclick="rqAddCourse()" style="margin-top:8px;width:100%;">Add &#8594; to my choices</button>
-            </div>
-            <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;">
-              <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:6px;">Your course choices (in priority order)</div>
-              <select id="rq-selected" multiple size="5" style="width:100%;min-width:0;padding:8px;font-size:15px;border:1px solid var(--gb);border-radius:10px;background:var(--card);"></select>
-              <div style="display:flex;gap:6px;margin-top:8px;">
-                <button class="add-buddy-btn" onclick="rqMoveCourse(-1)" style="flex:1;">&#8593; Up</button>
-                <button class="add-buddy-btn" onclick="rqMoveCourse(1)" style="flex:1;">&#8595; Down</button>
-                <button class="add-buddy-btn" onclick="rqRemoveCourse()" style="flex:1;">Remove</button>
-              </div>
-            </div>
+          <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:8px;">Tap a course to add it to your choices</div>
+          <div class="rq-avail-wrap" id="rq-available"></div>
+          <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;margin-top:14px;">
+            <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:8px;">Your course choices (in priority order)</div>
+            <div class="rq-sel-list" id="rq-selected"></div>
           </div>
         </div>
       </div>
@@ -1297,9 +1311,8 @@ async function loadRequestCourses(){
     if(d.success){
       SR.availableCourses=d.courses||[];
       SR.selectedCourses=[];
-      const avail=document.getElementById('rq-available');
-      avail.innerHTML=SR.availableCourses.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
-      document.getElementById('rq-selected').innerHTML='';
+      rqRenderAvailable();
+      rqRenderSelected();
       picker.style.display='block';
       status.textContent=`Loaded ${SR.availableCourses.length} courses.`; status.style.color='var(--g2)';
     } else {
@@ -1307,38 +1320,34 @@ async function loadRequestCourses(){
     }
   } catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
 }
-function rqAddCourse(){
-  const avail=document.getElementById('rq-available');
-  const sel=document.getElementById('rq-selected');
-  const opts=Array.from(avail.selectedOptions);
-  for(const o of opts){
-    if(SR.selectedCourses.includes(o.value)) continue;
-    SR.selectedCourses.push(o.value);
-    const newOpt=document.createElement('option');
-    newOpt.value=o.value; newOpt.text=o.value;
-    sel.appendChild(newOpt);
-  }
-  for(const o of opts){ o.selected=false; }
+function rqRenderAvailable(){
+  const wrap=document.getElementById('rq-available');
+  wrap.innerHTML=SR.availableCourses.map(c=>{
+    const added=SR.selectedCourses.includes(c);
+    return `<button type="button" class="rq-course-chip${added?' added':''}" data-c="${esc(c)}" onclick="rqAddCourse(this.dataset.c)">${esc(c)} <span class="plus">${added?'✓':'+'}</span></button>`;
+  }).join('');
 }
-function rqRemoveCourse(){
-  const sel=document.getElementById('rq-selected');
-  const opts=Array.from(sel.selectedOptions);
-  for(const o of opts){
-    SR.selectedCourses = SR.selectedCourses.filter(c=>c!==o.value);
-    sel.removeChild(o);
-  }
+function rqRenderSelected(){
+  const box=document.getElementById('rq-selected');
+  if(!SR.selectedCourses.length){ box.innerHTML='<div class="rq-sel-empty">No courses added yet. Tap one above.</div>'; return; }
+  const last=SR.selectedCourses.length-1;
+  box.innerHTML=SR.selectedCourses.map((c,i)=>
+    `<div class="rq-sel-row"><span class="rq-sel-num">${i+1}</span>`+
+    `<span class="rq-sel-name">${esc(c)}</span>`+
+    `<button type="button" class="rq-sel-btn" onclick="rqMove(${i},-1)" ${i===0?'disabled':''} aria-label="Move up">&#8593;</button>`+
+    `<button type="button" class="rq-sel-btn" onclick="rqMove(${i},1)" ${i===last?'disabled':''} aria-label="Move down">&#8595;</button>`+
+    `<button type="button" class="rq-sel-btn rm" onclick="rqRemoveAt(${i})" aria-label="Remove">&#10005;</button></div>`
+  ).join('');
 }
-function rqMoveCourse(direction){
-  const sel=document.getElementById('rq-selected');
-  const opt=sel.selectedOptions[0];
-  if(!opt) return;
-  const idx=Array.from(sel.options).indexOf(opt);
-  const newIdx=idx+direction;
-  if(newIdx<0 || newIdx>=sel.options.length) return;
-  if(direction<0){ sel.insertBefore(opt, sel.options[newIdx]); }
-  else { sel.insertBefore(opt, sel.options[newIdx].nextSibling); }
-  opt.selected=true;
-  SR.selectedCourses = Array.from(sel.options).map(o=>o.value);
+function rqAddCourse(name){
+  if(name && !SR.selectedCourses.includes(name)) SR.selectedCourses.push(name);
+  rqRenderAvailable(); rqRenderSelected();
+}
+function rqRemoveAt(i){ SR.selectedCourses.splice(i,1); rqRenderAvailable(); rqRenderSelected(); }
+function rqMove(i,dir){
+  const j=i+dir; if(j<0||j>=SR.selectedCourses.length) return;
+  const a=SR.selectedCourses, t=a[i]; a[i]=a[j]; a[j]=t;
+  rqRenderSelected();
 }
 async function submitRequest(){
   const err=document.getElementById('rq-err');
