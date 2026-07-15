@@ -140,6 +140,38 @@ def _timeout_error():
     return "The Villages golf site took too long to respond. Please try again."
 
 
+# A rejected TVN login does not redirect anywhere with "login" in the URL. The
+# site bounces back to the homepage with a ?reason=denied_* query string (e.g.
+# denied_bad_password) and an error banner. Detect both, otherwise the next step
+# (click GOLF, wait for glf000) just spins until its timeout and the golfer is
+# told the site was slow when their username or password was actually wrong.
+_TVN_DENIED_ERROR = (
+    "The Villages website did not accept that username or password. "
+    "Your TVN username is not your email address (it is the username you use on "
+    "thevillages.net), and the password is case-sensitive."
+)
+_GOLF_PIN_DENIED_ERROR = (
+    "The Villages golf system did not accept that golf PIN. "
+    "It is the PIN you use on the golf reservation screens, not your TVN password."
+)
+
+
+def _page_text(page):
+    """Best-effort visible text of the page, lowercased. '' if unavailable."""
+    try:
+        return (page.inner_text("body") or "").lower()
+    except Exception:
+        return ""
+
+
+def _tvn_login_rejected(page):
+    """True if thevillages.net refused the TVN username / password."""
+    url = (page.url or "").lower()
+    if "reason=denied" in url or "login" in url:
+        return True
+    return "error in processing either your" in _page_text(page)
+
+
 def _initials(name):
     """Derive initials from a name like 'Worley, Walter Douglas' or 'Walter Worley'."""
     name = name.strip()
@@ -191,6 +223,13 @@ class GolfService:
         self._sessions = OrderedDict()   # tvn_username -> _Session
         self._active = None              # the _Session for the in-flight request
         self._active_user = None
+
+    def _safe_url(self):
+        """URL of the in-flight session's page, for logging. '?' if unavailable."""
+        try:
+            return self._active.page.url if self._active and self._active.page else "?"
+        except Exception:
+            return "?"
 
     def _close(self, sess):
         """Tear down one session's Playwright objects."""
@@ -295,15 +334,30 @@ class GolfService:
         except Exception:
             page.wait_for_load_state("domcontentloaded", timeout=10000)
 
-        if "login" in page.url.lower():
-            raise RuntimeError("TVN login failed — check username / password")
+        if _tvn_login_rejected(page):
+            raise RuntimeError(_TVN_DENIED_ERROR)
 
         # Step 2: Golf system login
         page.locator("a", has_text="GOLF").first.click()
-        page.wait_for_url("**/glf000**", timeout=12000)
+        try:
+            page.wait_for_url("**/glf000**", timeout=12000)
+        except PWTimeout:
+            # Never reaching the PIN screen almost always means the TVN login
+            # was refused after all, rather than the site being slow.
+            if _tvn_login_rejected(page):
+                raise RuntimeError(_TVN_DENIED_ERROR)
+            raise
+
         page.locator("input:visible").first.fill(golf_password)
         page.locator('input[value="Continue"]').click()
-        page.wait_for_url("**/glf100**", timeout=12000)
+        try:
+            page.wait_for_url("**/glf100**", timeout=12000)
+        except PWTimeout:
+            # A bad PIN re-renders glf000 instead of advancing to the menu.
+            if "glf000" in (page.url or "").lower():
+                raise RuntimeError(_GOLF_PIN_DENIED_ERROR)
+            raise
+
         self._active.golf_home_url = page.url
         self._active.ts = _time.time()
 
@@ -574,9 +628,16 @@ class GolfService:
             return {"success": True, "primary": primary, "buddies": buddies}
 
         except PWTimeout:
+            # Record where we stalled; a bare timeout with no URL leaves the
+            # reported "site was slow" unfalsifiable after the fact.
+            logger.warning(
+                "fetch_buddy_list timed out for user=%s at url=%s",
+                tvn_username, self._safe_url(),
+            )
             self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
+            logger.info("fetch_buddy_list rejected for user=%s: %s", tvn_username, e)
             self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
