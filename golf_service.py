@@ -193,13 +193,10 @@ def _initials(name):
 
 # ── Main service class ────────────────────────────────────────────────────────
 class _Session:
-    """One logged-in browser session for a single golfer."""
-    __slots__ = ("pw", "browser", "context", "page", "ts",
-                 "golf_home_url", "search_context")
+    """One logged-in browser context for a single golfer."""
+    __slots__ = ("context", "page", "ts", "golf_home_url", "search_context")
 
     def __init__(self):
-        self.pw = None
-        self.browser = None
         self.context = None
         self.page = None
         self.ts = 0
@@ -208,11 +205,15 @@ class _Session:
 
 
 class GolfService:
-    # Keep a small pool of warm sessions, one per golfer, so concurrent users
-    # don't evict each other and force a full re-login on every request. All
-    # sessions live on the single worker thread (Playwright sync API), so a
-    # dict of browsers on one thread is safe. Least-recently-used is evicted
-    # when the pool is full.
+    # Playwright's sync API allows only one live sync_playwright() instance per
+    # OS thread, so GolfService owns exactly one shared playwright instance and
+    # one shared chromium Browser (both lazy, built on first use). Per-user
+    # isolation comes from BrowserContext, not the Browser: each _Session holds
+    # its own context (cookies, login, viewport, user agent), and a small pool
+    # of these per-user contexts is kept warm so concurrent golfers don't evict
+    # each other and force a full re-login on every request. All work runs on
+    # the single worker thread, so this is safe without locking.
+    # Least-recently-used context is evicted when the pool is full.
     _MAX_SESSIONS = int(os.environ.get("MAX_BROWSER_SESSIONS", "4"))
     # A session used within this window is treated as "mid-shopping" (a golfer
     # who searched and is about to book) and protected from LRU eviction.
@@ -223,6 +224,8 @@ class GolfService:
         self._sessions = OrderedDict()   # tvn_username -> _Session
         self._active = None              # the _Session for the in-flight request
         self._active_user = None
+        self._pw = None                  # shared sync_playwright() instance
+        self._browser = None             # shared chromium Browser
 
     def _safe_url(self):
         """URL of the in-flight session's page, for logging. '?' if unavailable."""
@@ -232,18 +235,15 @@ class GolfService:
             return "?"
 
     def _close(self, sess):
-        """Tear down one session's Playwright objects."""
+        """Tear down one session's browser context. The shared browser and
+        playwright instance outlive individual sessions and are never closed
+        here."""
         if not sess:
             return
-        for closer in (
-            lambda: sess.context and sess.context.close(),
-            lambda: sess.browser and sess.browser.close(),
-            lambda: sess.pw and sess.pw.stop(),
-        ):
-            try:
-                closer()
-            except Exception:
-                pass
+        try:
+            sess.context and sess.context.close()
+        except Exception:
+            pass
 
     def _drop_session(self, tvn_username):
         """Close and forget a user's session."""
@@ -259,13 +259,17 @@ class GolfService:
             self._drop_session(self._active_user)
 
     def _session_usable(self, sess):
-        """Return True if a session's Playwright objects still look valid."""
-        if not sess or not sess.browser or not sess.page:
+        """Return True if a session's context/page are still valid AND the
+        shared browser they belong to is still alive. A dead shared browser
+        takes every pooled context down with it, so this must fail closed
+        rather than let a caller (e.g. book_tee_time) try to use a page whose
+        underlying browser process is gone."""
+        if not sess or not sess.context or not sess.page:
             return False
         try:
-            if hasattr(sess.browser, "is_connected") and not sess.browser.is_connected():
+            if not self._browser or not self._browser.is_connected():
                 return False
-            if hasattr(sess.page, "is_closed") and sess.page.is_closed():
+            if sess.page.is_closed():
                 return False
         except Exception:
             return False
@@ -278,11 +282,16 @@ class GolfService:
         if sess and self._session_usable(sess):
             self._sessions.move_to_end(tvn_username)   # mark most-recently-used
             self._active, self._active_user = sess, tvn_username
-            return sess.browser, sess.page
+            return self._browser, sess.page
 
         # Stale entry — discard before rebuilding.
         if sess:
             self._drop_session(tvn_username)
+
+        # Do this before the eviction loop: if the shared browser died, every
+        # pooled context died with it, so the pool gets invalidated first and
+        # the eviction loop below runs against a clean (possibly empty) pool.
+        self._ensure_browser()
 
         # Evict to make room, but never evict a golfer who just searched and is
         # about to book (the 7 AM money path). Prefer the oldest idle session;
@@ -300,20 +309,73 @@ class GolfService:
             self._close(old_sess)
 
         sess = _Session()
-        sess.pw = sync_playwright().start()
-        sess.browser, sess.context, sess.page = self._launch(sess.pw)
+        sess.context, sess.page = self._new_context()
         sess.ts = _time.time()
         self._sessions[tvn_username] = sess
         self._active, self._active_user = sess, tvn_username
-        return sess.browser, sess.page
+        return self._browser, sess.page
 
-    def _launch(self, playwright):
-        browser = playwright.chromium.launch(
-            headless=_HEADLESS,
-            slow_mo=600 if not _HEADLESS else 0,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
-        ctx = browser.new_context(
+    def _ensure_browser(self):
+        """Make sure self._browser is a live chromium Browser, launching (or
+        relaunching) the shared playwright + browser as needed. Playwright's
+        sync API tolerates only one sync_playwright() instance per thread, so
+        this instance and browser are shared across every pooled session."""
+        if self._browser is not None:
+            try:
+                alive = self._browser.is_connected()
+            except Exception:
+                alive = False
+            if alive:
+                return
+            # The shared browser died, which takes every pooled context down
+            # with it. There is nothing left to reuse, so drop the whole pool
+            # rather than leave sessions around whose context/page are dead.
+            logger.warning(
+                "shared browser died; relaunching and invalidating %d pooled sessions",
+                len(self._sessions),
+            )
+            for sess in list(self._sessions.values()):
+                self._close(sess)
+            self._sessions.clear()
+            self._active = None
+            self._active_user = None
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+
+        if self._pw is None:
+            self._pw = sync_playwright().start()
+
+        logger.info("launching shared chromium browser (headless=%s)", _HEADLESS)
+        try:
+            self._browser = self._pw.chromium.launch(
+                headless=_HEADLESS,
+                slow_mo=600 if not _HEADLESS else 0,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+        except Exception:
+            # A wedged playwright instance should not permanently break the
+            # service: restart it once and retry the launch once.
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+            self._pw = sync_playwright().start()
+            logger.info("relaunching shared chromium browser after a failed launch")
+            self._browser = self._pw.chromium.launch(
+                headless=_HEADLESS,
+                slow_mo=600 if not _HEADLESS else 0,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+
+    def _new_context(self):
+        """Create a fresh, isolated BrowserContext + Page on the shared
+        browser. Cookies, storage, viewport, and user agent are all
+        context-scoped, so a fresh context is all per-user isolation needs."""
+        ctx = self._browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -321,7 +383,7 @@ class GolfService:
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
         )
-        return browser, ctx, ctx.new_page()
+        return ctx, ctx.new_page()
 
     def _login(self, page, tvn_username, tvn_password, golf_password):
         # Step 1: TVN login

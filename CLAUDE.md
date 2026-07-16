@@ -54,7 +54,7 @@ The automation navigates these pages in order:
 - The hidden booking input on glf109y is `HHMM01` (e.g., time `02:05` → `020501`).
 - Time filter labels in `golf_service.py` (`_FILTER_*` constants) must stay in sync with the onclick strings in `index.html`. Includes `_FILTER_ALL = "all"` for "Any Time".
 - Gunicorn is configured with `--workers 1` (Playwright sync API is not thread-safe across workers) and `--threads 4 --timeout 120`.
-- `GolfService` tracks `_current_user` to invalidate the cached Playwright session when a different user makes a request.
+- `GolfService` keeps one shared headless browser with a small LRU pool of per-user browser contexts; a context is dropped and rebuilt when its login goes stale.
 - Firestore document shape (collection `users`, doc id = TVN username): `tvn_password`, `golf_password`, `display_name`, `primary` (id/name/initials), `buddies`, `email`.
 - Login rate limiter (`_login_attempts`) is in-memory per-instance — soft guardrail only, not consistent across Cloud Run instances.
 
