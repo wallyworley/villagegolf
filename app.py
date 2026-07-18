@@ -16,7 +16,7 @@ import uuid
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
-load_dotenv()  # loads .env when running locally; no-op in Cloud Run
+load_dotenv()  # load .env (on the VPS, systemd also injects these via EnvironmentFile)
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),

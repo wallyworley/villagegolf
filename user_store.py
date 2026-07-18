@@ -1,7 +1,7 @@
 """
 SQLite-backed user profile store.
 
-Replaces the Firestore backend so the app has no external cloud dependency and
+A local store so the app has no external cloud dependency and
 runs self-contained on a single host (e.g. a VPS). Concurrency is handled by
 SQLite's WAL mode plus a busy timeout; the volume here is tiny (a handful of
 golfers), so a fresh connection per call keeps the threading model trivial.

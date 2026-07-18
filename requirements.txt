@@ -6,8 +6,6 @@ certifi==2024.8.30
 cryptography==43.0.1
 # User profiles are stored in SQLite (stdlib `sqlite3`) — no external store.
 # cryptography encrypts the user blob at rest when USER_DB_ENCRYPTION_KEY is set.
-# google-cloud-firestore is no longer a runtime dependency; it is only needed
-# to run migrate_firestore_to_sqlite.py once during the cutover.
 #
 # Ubuntu 24.04 (Noble) note: `playwright install-deps` fails because it asks
 # for pre-t64 lib names. Install the system libs manually instead — see

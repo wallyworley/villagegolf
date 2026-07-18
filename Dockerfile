@@ -13,7 +13,7 @@ RUN playwright install chromium
 # Copy application code
 COPY . .
 
-# Cloud Run sets PORT automatically; default to 8080
+# Bind to $PORT if the environment sets it, else default to 8080
 ENV PORT=8080
 
 # Run with gunicorn: 1 worker, 1 thread (Playwright sync API is not

@@ -1,201 +1,74 @@
-# Villages Golf App — Deployment Guide
-## Google Cloud Run (Step-by-Step)
+# Villages Golf App: VPS Deployment Guide
 
-Estimated time: **20–30 minutes** (most of it is waiting for builds).
+The app runs on a self-hosted VPS. gunicorn serves it, Caddy terminates TLS and reverse-proxies to it, and systemd keeps it running. There is no Google Cloud dependency: user profiles live in a local SQLite file. Live at https://villagefairways.com.
 
----
+## Server Layout
 
-## What You'll Need
-- A Google Cloud account ✓
-- Firestore enabled in your project (Native mode, same region as Cloud Run)
-- A stable `SECRET_KEY` value (generate **once**, reuse on every deploy)
-- A verified sender set up in MailerSend:
-  - API token
-  - From email address
-  - Optional from name
+- Host: `root@40.160.233.235` (SSH via key).
+- App directory: `/opt/villages-golf-app` (a git checkout of `master`).
+- Process: gunicorn (1 worker, 4 threads, `--timeout 250`) bound to `127.0.0.1:8080`, managed by the systemd unit `villages-golf.service`.
+- TLS and reverse proxy: Caddy on 443 auto-provisions a Let's Encrypt certificate and proxies to `127.0.0.1:8080`. Do not install nginx (it would conflict on ports 80/443).
+- User data: SQLite at `/opt/villages-golf-app/users.db`, encrypted at rest when `USER_DB_ENCRYPTION_KEY` is set.
+- Config: `/opt/villages-golf-app/.env` (chmod 600). systemd loads it via `EnvironmentFile`, so it is re-read only on restart.
 
----
+## One-Time Prerequisites
 
-## Step 1 — Install Google Cloud CLI
+- A stable `SECRET_KEY`. Generate it once and reuse it forever:
+  ```bash
+  openssl rand -hex 32
+  ```
+  Changing it later logs everyone out (Flask signs session cookies with it).
+- A verified MailerSend sender: an API token, a from-address on a verified sending domain, and an optional from name. Do not use a MailerSend trial domain (`*.mlsender.net`) as the from-address: it only delivers to the account admin's own inbox.
 
-1. Go to: https://clocdud.google.com/sdk/docs/install
-2. Download and run the installer for Mac
-3. Open **Terminal** and run:
-   ```
-   gcloud init
-   ```
-4. Sign in with your Google account and select your project.
+## Deploy a Code Update
 
----
-
-## Step 2 — Enable Required Services
+Push to `master`, then pull and restart on the VPS:
 
 ```bash
-gcloud services enable run.googleapis.com
-gcloud services enable cloudbuild.googleapis.com
-gcloud services enable firestore.googleapis.com
+# on your machine
+git push origin master
+
+# on the VPS
+ssh root@40.160.233.235
+cd /opt/villages-golf-app
+git pull --ff-only origin master
+systemctl restart villages-golf.service
+systemctl is-active villages-golf.service   # expect: active
 ```
 
-If you haven't already created a Firestore database, do so in the Cloud Console (Firestore → Create database → **Native mode** → same region as Cloud Run, e.g. `us-east1`). User profiles are stored here so they survive redeploys and scaling.
+## Change Environment Variables (Including Mail Settings)
 
----
-
-## Step 3 — Navigate to the Project Folder
+All config lives in `/opt/villages-golf-app/.env`. Edit the file, then restart so systemd re-reads it:
 
 ```bash
-cd ~/Documents/villages-golf-app
+ssh root@40.160.233.235
+cd /opt/villages-golf-app
+nano .env          # e.g. MAILERSEND_API_TOKEN, MAIL_FROM_EMAIL, MAIL_FROM_NAME
+systemctl restart villages-golf.service
 ```
 
----
+Common vars: `SECRET_KEY`, `MAILERSEND_API_TOKEN`, `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME`, `USER_DB_ENCRYPTION_KEY`, `LOG_LEVEL`. Do not set the local-dev-only flags `SESSION_COOKIE_SECURE=0` or `ALLOW_PLAINTEXT_USER_DB=1` on the VPS.
 
-## Step 4 — Generate Your `SECRET_KEY` (one time only)
-
-Run this **once** and save the output somewhere safe (password manager, sticky note, whatever):
+## View Logs
 
 ```bash
-openssl rand -hex 32
+journalctl -u villages-golf.service -n 100 --no-pager   # recent lines
+journalctl -u villages-golf.service -f                  # follow live
 ```
 
-You'll paste that same value into every deploy command from now on. **Do not** regenerate it — doing so logs everyone out of the app, because Flask uses it to sign session cookies.
+Email results appear here: `email.sent ... status=202` on success, and `email.auth_fail ... status=401` when the MailerSend token is invalid or the sender is not verified.
 
----
+## Add to iPhone Home Screen
 
-## Step 5 — Deploy to Cloud Run
-
-Copy this command, fill in your values, then run it in Terminal:
-
-```bash
-gcloud run deploy villages-golf \
-  --source . \
-  --region us-east1 \
-  --allow-unauthenticated \
-  --memory 2Gi \
-  --timeout 180 \
-  --set-env-vars "MAILERSEND_API_TOKEN=YOUR_MAILERSEND_API_TOKEN" \
-  --set-env-vars "MAIL_FROM_EMAIL=YOUR_VERIFIED_FROM_EMAIL" \
-  --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
-  --set-env-vars "SECRET_KEY=YOUR_SAVED_SECRET_KEY"
-```
-
-Replace:
-| Placeholder | Replace with |
-|---|---|
-| `YOUR_MAILERSEND_API_TOKEN` | Your MailerSend API token |
-| `YOUR_VERIFIED_FROM_EMAIL` | A sender address verified in MailerSend |
-
-Build takes about 5–8 minutes.
-
-The app no longer stores Villages credentials in Cloud Run environment variables. Each golfer enters their own Villages username, password, and golf PIN inside the app when registering. After logging in once on a device, the Flask session keeps them signed in.
-
-### How Environment Variables Work
-
-The `--set-env-vars` lines in the deploy command are where you add your MailerSend settings.
-
-Example:
-
-```bash
---set-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE"
-```
-
-Replace only the value to the right of the `=` sign. Do not add extra quotes inside the value.
-
-### Full Example
-
-```bash
-gcloud run deploy villages-golf \
-  --source . \
-  --region us-east1 \
-  --allow-unauthenticated \
-  --memory 2Gi \
-  --timeout 180 \
-  --set-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE" \
-  --set-env-vars "MAIL_FROM_EMAIL=your-verified-sender@example.com" \
-  --set-env-vars "MAIL_FROM_NAME=Villages Golf" \
-  --set-env-vars "SECRET_KEY=YOUR_SAVED_SECRET_KEY"
-```
-
-Replace:
-| Placeholder | Replace with |
-|---|---|
-| `YOUR_NEW_TOKEN_HERE` | Your MailerSend API token |
-| `your-verified-sender@example.com` | A sender address verified in MailerSend |
-| `YOUR_SAVED_SECRET_KEY` | The hex string you generated once in Step 4 |
-
-Important:
-- Since your previous MailerSend token was exposed, rotate it in MailerSend first and use the new token in this command.
-- `MAIL_FROM_EMAIL` must be a verified MailerSend sender address or email sending will fail.
-- Reuse the **same** `SECRET_KEY` on every deploy. Changing it invalidates all login sessions.
-
-### First Deploy Checklist
-
-1. Verify your sending domain or single sender email in MailerSend.
-2. Create a new MailerSend API token with email sending permission.
-3. Confirm the exact sender address you will use for `MAIL_FROM_EMAIL`.
-4. Run the deploy command above.
-5. Open the app after deploy and register a golfer profile.
-6. Enter your own email address in the email notifications field.
-7. Complete a test booking and confirm the email arrives.
-8. If email fails, read the Cloud Run logs:
-
-```bash
-gcloud run services logs read villages-golf --region us-east1
-```
-
----
-
-## Step 6 — Get Your App URL
-
-After deploy you'll see:
-```
-Service URL: https://villages-golf-xxxxxxxx-ue.a.run.app
-```
-
-Open it in any browser and bookmark it on your phone.
-
----
-
-## Step 7 — Add to iPhone Home Screen
-
-1. Open the URL in **Safari** on your iPhone
-2. Tap the **Share** button (bottom center)
-3. Tap **"Add to Home Screen"**
-4. Name it "Villages Golf" → tap **Add**
-
----
-
-## Updating Mail Settings Later
-
-```bash
-gcloud run services update villages-golf \
-  --region us-east1 \
-  --update-env-vars "MAILERSEND_API_TOKEN=NEW_TOKEN"
-```
-
-If you want to update all mail settings at once, use:
-
-```bash
-gcloud run services update villages-golf \
-  --region us-east1 \
-  --update-env-vars "MAILERSEND_API_TOKEN=YOUR_NEW_TOKEN_HERE,MAIL_FROM_EMAIL=your-verified-sender@example.com,MAIL_FROM_NAME=Villages Golf"
-```
-
----
-
-## Cost Estimate
-
-Cloud Run free tier covers ~2–3 bookings/week at **$0/month**.
-
----
+1. Open https://villagefairways.com in Safari.
+2. Tap Share, then "Add to Home Screen".
+3. Name it "Villages Golf" and tap Add.
 
 ## Troubleshooting
 
-**"Email not sending"** — Check `MAILERSEND_API_TOKEN` and `MAIL_FROM_EMAIL`, and make sure the sender is verified in MailerSend.
+- Email not sending: check `journalctl` for `email.auth_fail`. Confirm `MAILERSEND_API_TOKEN` is valid and `MAIL_FROM_EMAIL` sits on a verified MailerSend domain.
+- Login failed: the Villages username, password, or golf PIN entered at registration is wrong.
+- Page timed out: the Villages site may be slow. Try again in a few minutes.
+- Service will not start: run `systemctl status villages-golf.service` and `journalctl -u villages-golf.service -n 50`.
 
-**"Login failed"** — Check the Villages username, password, and golf PIN entered during registration.
-
-**"Page timed out"** — The Villages site may be slow; try again in a few minutes.
-
-**View logs:**
-```bash
-gcloud run services logs read villages-golf --region us-east1
-```
+Deeper server setup notes (initial provisioning, Caddy config, Ubuntu 24.04 Playwright libraries) live on the VPS at `/opt/villages-golf-app/DEPLOY_VPS_NOTES.md`.
