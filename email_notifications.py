@@ -95,12 +95,26 @@ def send_email(recipient_email, subject, text_body, html_body=None):
             body = exc.read().decode("utf-8", errors="replace")
         except Exception:
             body = "<unreadable>"
-        log.warning(
-            "email.fail recipient=%s status=%s body=%s",
-            _mask_email(recipient_email),
-            exc.code,
-            body,
-        )
+        # 401/403 mean the API token is missing, revoked, or the sender domain is
+        # not verified: a permanent misconfiguration that silently drops every
+        # email, not a transient blip. Log it at ERROR so a dead token is caught
+        # instead of hiding at WARNING and looking like a one-off network error.
+        if exc.code in (401, 403):
+            log.error(
+                "email.auth_fail recipient=%s status=%s body=%s "
+                "(check MAILERSEND_API_TOKEN is valid and MAIL_FROM_EMAIL is a "
+                "verified MailerSend sender)",
+                _mask_email(recipient_email),
+                exc.code,
+                body,
+            )
+        else:
+            log.warning(
+                "email.fail recipient=%s status=%s body=%s",
+                _mask_email(recipient_email),
+                exc.code,
+                body,
+            )
         return False
     except Exception as exc:
         log.warning("email.error recipient=%s error=%s", _mask_email(recipient_email), exc)
