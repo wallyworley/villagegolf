@@ -9,13 +9,19 @@ import json
 import logging
 import os
 import queue
+import random
+import re
 import threading
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, session, send_from_directory
+from flask import Flask, Response, jsonify, request, session, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+from course_metadata import BAND_KEYS
 load_dotenv()  # load .env (on the VPS, systemd also injects these via EnvironmentFile)
 
 logging.basicConfig(
@@ -52,6 +58,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=_cookie_secure,
+    MAX_CONTENT_LENGTH=65536,
 )
 
 # Behind Caddy (a single trusted reverse proxy on localhost) the real client IP
@@ -145,6 +152,7 @@ def _worker_public_error(action):
 # Self-contained local store — no external cloud dependency. See user_store.py.
 import user_store
 import request_watches
+import preferences as website_preferences
 
 # Fail fast at boot if credentials-at-rest encryption isn't configured, so we
 # never silently write cleartext Villages passwords/PINs to disk in production.
@@ -210,16 +218,28 @@ class GolfWorker:
     # A single Playwright call (e.g. a hung page.evaluate) has no timeout and can
     # wedge this one worker thread forever, taking the whole app down. If a job
     # runs past this deadline it is definitively stuck (the caller already gave
-    # up at 240s), so we self-terminate and let systemd/gunicorn restart us.
-    # Set comfortably above the 240s call timeout so slow-but-progressing jobs
-    # are never killed.
+    # up at the call timeout), so we self-terminate and let systemd/gunicorn
+    # restart us. Set comfortably above _CALL_TIMEOUT_SECONDS so slow-but-
+    # progressing jobs are never killed.
     _WATCHDOG_SECONDS = int(os.environ.get("WORKER_WATCHDOG_SECONDS", "280"))
 
+    # How long call() waits for a job before giving up on the caller's behalf.
+    # The job itself is not stopped when this elapses; it keeps running on the
+    # worker thread until it finishes, or the watchdog above kills the process.
+    _CALL_TIMEOUT_SECONDS = 240
+
+    # Mutations must not run twice for the same account while one is still in
+    # flight (e.g. a double-tapped Book It! button). Refuse the second call
+    # outright instead of queueing it or making the caller wait.
+    _MUTATION_METHODS = frozenset({"book_tee_time", "submit_request", "delete_reservation", "delete_request"})
+
     def __init__(self):
-        self._job_q = queue.Queue()
+        self._job_q = queue.Queue(maxsize=12)
         self._ready = threading.Event()
         self._current = {"started": 0.0, "method": None}
         self._current_lock = threading.Lock()
+        self._inflight = {}  # exclusive_key -> True, while a mutation for it runs
+        self._inflight_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._run,
             name="golf-worker",
@@ -273,6 +293,7 @@ class GolfWorker:
             # failed would produce a silent/duplicate reservation.
             if done.get("cancelled"):
                 app.logger.warning("worker.skip_cancelled method=%s", method_name)
+                self._release(done.get("key"))
                 done["event"].set()
                 continue
             with self._current_lock:
@@ -280,18 +301,51 @@ class GolfWorker:
             try:
                 method = getattr(service, method_name)
                 done["result"] = method(**kwargs)
-            except Exception as exc:
+            except BaseException as exc:
                 done["error"] = exc
             finally:
                 with self._current_lock:
                     self._current = {"started": 0.0, "method": None}
+                self._release(done.get("key"))
                 done["event"].set()
+            # A BaseException that is not an Exception (SystemExit,
+            # KeyboardInterrupt, asyncio.CancelledError, ...) is a genuine
+            # interpreter-level exit signal, not an application error. The
+            # release and event-set above have already run, so the caller in
+            # call() is unblocked with the error recorded; only now do we let
+            # the exception continue so this thread actually terminates.
+            if done["error"] is not None and not isinstance(done["error"], Exception):
+                app.logger.error("worker.fatal_exception method=%s exc=%r", method_name, done["error"])
+                raise done["error"]
 
-    def call(self, method_name, request_id="-", action=None, **kwargs):
+    def _release(self, key):
+        """Release an exclusivity key, tolerating a call with no key at all."""
+        if key is None:
+            return
+        with self._inflight_lock:
+            self._inflight.pop(key, None)
+
+    def call(self, method_name, request_id="-", action=None, exclusive_key=None, **kwargs):
         if not self._thread.is_alive():
             raise RuntimeError("Golf worker thread is not running")
 
         action = action or method_name
+
+        is_mutation = method_name in self._MUTATION_METHODS
+        key = exclusive_key if (is_mutation and exclusive_key is not None) else None
+        if key is not None:
+            with self._inflight_lock:
+                if key in self._inflight:
+                    app.logger.info(
+                        "worker.busy request_id=%s action=%s key=%s",
+                        request_id, action, key,
+                    )
+                    return {"success": False, "busy": True, "error":
+                             "A booking or cancellation for this account is still being "
+                             "processed. Wait for it to finish, then check My Tee Times or "
+                             "My Requests before trying again."}
+                self._inflight[key] = True
+
         started = time.monotonic()
         app.logger.info(
             "worker.start request_id=%s action=%s method=%s",
@@ -301,13 +355,19 @@ class GolfWorker:
         )
 
         done = {"event": threading.Event(), "result": None, "error": None,
-                "cancelled": False}
-        self._job_q.put((method_name, kwargs, done))
+                "cancelled": False, "key": key}
+        try:
+            self._job_q.put_nowait((method_name, kwargs, done))
+        except queue.Full:
+            self._release(key)
+            return {"success": False, "error": "The golf system is busy. Please try again shortly."}
 
-        if not done["event"].wait(timeout=240):
+        if not done["event"].wait(timeout=self._CALL_TIMEOUT_SECONDS):
             # Mark the job cancelled so the worker skips it if it is still queued
             # behind a slow job. (A job already mid-execution is not stopped here;
-            # that is the golf_service watchdog's job.)
+            # that is the golf_service watchdog's job.) Do not release the
+            # exclusivity key here: the job may still be running, and only the
+            # worker thread (skip_cancelled path or _run's finally) releases it.
             done["cancelled"] = True
             elapsed_ms = int((time.monotonic() - started) * 1000)
             app.logger.error(
@@ -318,10 +378,13 @@ class GolfWorker:
             )
             _operator_alert(
                 "Golf worker timeout",
-                f"A '{action}' job exceeded 240s (request_id={request_id}). "
+                f"A '{action}' job exceeded {self._CALL_TIMEOUT_SECONDS}s (request_id={request_id}). "
                 "The browser worker may be wedged or the queue saturated.",
             )
-            return {"success": False, "error": "Internal timeout waiting for booking worker."}
+            mutation = method_name in self._MUTATION_METHODS
+            return {"success": False, "unknown": mutation,
+                    "error": "We could not confirm the outcome. Check your tee times or requests before trying again."
+                    if mutation else "The golf system took too long to respond. Please try again."}
         if done["error"] is not None:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             app.logger.exception(
@@ -337,10 +400,31 @@ class GolfWorker:
                 f"{done['error']} (request_id={request_id}). Possible selector "
                 "drift on thevillages.net.",
             )
-            return {"success": False, "error": _worker_public_error(action)}
+            mutation = method_name in self._MUTATION_METHODS
+            return {"success": False, "unknown": mutation, "error":
+                    "We could not confirm the outcome. Check your tee times or requests before trying again."
+                    if mutation else _worker_public_error(action)}
+        if not isinstance(done["result"], dict):
+            # Defense in depth: every normal exit from _run's job loop sets
+            # either done["result"] (success) or done["error"] (any raised
+            # exception) before the event fires. This should not be reachable,
+            # but a caller blocked on done["event"] must never call .get() on
+            # something that is not a dict.
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            app.logger.error(
+                "worker.no_result request_id=%s action=%s duration_ms=%s",
+                request_id,
+                action,
+                elapsed_ms,
+            )
+            mutation = method_name in self._MUTATION_METHODS
+            return {"success": False, "unknown": mutation, "error":
+                    "We could not confirm the outcome. Check your tee times or requests before trying again."
+                    if mutation else _worker_public_error(action)}
         elapsed_ms = int((time.monotonic() - started) * 1000)
         global _worker_last_success_ts
-        _worker_last_success_ts = time.time()
+        if done["result"].get("success"):
+            _worker_last_success_ts = time.time()
         app.logger.info(
             "worker.done request_id=%s action=%s duration_ms=%s success=%s",
             request_id,
@@ -370,76 +454,123 @@ def get_worker():
 # reservation. This background loop runs those checks at the right time and
 # emails the outcome. Watches live in SQLite, so a restart loses nothing.
 _WATCH_INTERVAL_SECONDS = int(os.environ.get("REQUEST_WATCH_INTERVAL", "900"))  # 15 min
+_WATCH_BATCH_LIMIT = int(os.environ.get("REQUEST_WATCH_BATCH", "8"))
+_WATCH_JITTER_SECONDS = (0.5, 3.0)
 
 
-def _notify_request_result(watch, result, reservation):
-    """Email a request outcome (fire-and-forget)."""
-    email = (watch.get("email") or "").strip()
-    if not email:
-        return
-    try:
-        courses = json.loads(watch.get("courses") or "[]")
-    except Exception:
-        courses = []
-    label = watch.get("play_date_label") or watch.get("play_date")
+def _watch_pause():
+    """Short random pause between due-watch checks (see _run_due_request_checks)."""
+    time.sleep(random.uniform(*_WATCH_JITTER_SECONDS))
 
-    def _task():
+
+def _send_pending_request_notifications():
+    """Deliver persisted outcomes; retry failed sends across process restarts."""
+    for watch in request_watches.due_notifications():
+        user = _get_user(watch["username"])
+        if not user:
+            request_watches.cancel_watch(watch["id"])
+            continue
+        email = _user_email(user)  # honor email changes after the request was made
+        if not email:
+            continue
         try:
-            send_request_result(email, result, label, courses, reservation)
-            app.logger.info(
-                "request_watch.notified user=%s result=%s date=%s",
-                watch.get("username"), result, watch.get("play_date"),
+            sent = send_request_result(
+                email, watch["result"], watch.get("play_date_label") or watch["play_date"],
+                json.loads(watch.get("courses") or "[]"),
+                json.loads(watch.get("result_detail") or "null"),
             )
-        except Exception as e:
-            app.logger.warning("request_watch.notify_error error=%s", e)
+            request_watches.finish_notification(watch["id"], bool(sent))
+            app.logger.info(
+                "request_watch.notification user=%s sent=%s", watch["username"], bool(sent),
+            )
+        except Exception:
+            request_watches.finish_notification(watch["id"], False)
+            app.logger.exception("request_watch.notify_error")
 
-    threading.Thread(target=_task, name="req-watch-email", daemon=True).start()
+
+def _send_pending_outbox():
+    """Deliver persisted outbox notifications (e.g. booking confirmations);
+    retry failed sends across process restarts, mirroring
+    _send_pending_request_notifications. Each row is claimed with
+    request_watches.claim_outbox before it is acted on, so the immediate
+    post-booking thread and the loop's own periodic pass can never both send
+    the same row; a row this call loses the claim race for is skipped and
+    left to whichever sender claimed it."""
+    for row in request_watches.due_outbox():
+        if not request_watches.claim_outbox(row["id"]):
+            continue
+        if row["kind"] != "booking_confirmation":
+            request_watches.finish_outbox(row["id"], False, exhaust=True)
+            app.logger.warning("email.outbox_unknown_kind id=%s kind=%s", row["id"], row["kind"])
+            continue
+        try:
+            sent = send_booking_confirmation(row["email"], **json.loads(row["payload"]))
+            request_watches.finish_outbox(row["id"], bool(sent))
+            app.logger.info(
+                "email.outbox_sent id=%s user=%s sent=%s", row["id"], row["username"], bool(sent),
+            )
+        except Exception:
+            request_watches.finish_outbox(row["id"], False)
+            app.logger.exception("email.outbox_error id=%s", row["id"])
 
 
 def _run_due_request_checks():
-    """Check every watch whose assignment time has passed; notify the golfer."""
-    due = request_watches.due_watches()
+    """Check due watches (assignment time passed), up to a per-pass cap.
+
+    Each check drives the shared Playwright worker, the same one live golfer
+    requests wait behind, so a pass is capped at _WATCH_BATCH_LIMIT watches
+    with a short random pause between worker calls (not after the last), to
+    avoid a burst of due watches starving a live request. Any watches left
+    over past the cap are picked up on the loop's next pass; this is
+    safe because a watch is not otherwise time-sensitive beyond the 2-hour
+    grace window after the 1:30 AM ET assignment time
+    (request_watches._ASSIGNMENT_GRACE_SECONDS), comfortably longer than one
+    loop interval.
+    """
+    due = request_watches.due_watches(limit=_WATCH_BATCH_LIMIT)
     if not due:
         return
-    app.logger.info("request_watch.due count=%d", len(due))
-    for w in due:
+    app.logger.info("request_watch.due count=%d limit=%d", len(due), _WATCH_BATCH_LIMIT)
+    for index, w in enumerate(due):
         user = _get_user(w["username"])
         if not user:
             request_watches.cancel_watch(w["id"])  # account gone
-            continue
-        result = get_worker().call(
-            "view_my_tee_times",
-            request_id="watch",
-            action="my_tee_times",
-            tvn_username=w["username"],
-            tvn_password=user["tvn_password"],
-            golf_password=user["golf_password"],
-        )
-        if not result.get("success"):
-            if request_watches.bump_attempt(w["id"]):  # retries exhausted
-                _notify_request_result(w, "unknown", None)
-            continue
-        reservations = result.get("reservations", []) or []
-        matched = next(
-            (r for r in reservations
-             if request_watches.reservation_matches(r.get("date"), w["play_date"])),
-            None,
-        )
-        if matched:
-            request_watches.mark_result(w["id"], "assigned", matched)
-            _notify_request_result(w, "assigned", matched)
         else:
-            request_watches.mark_result(w["id"], "not_assigned", None)
-            _notify_request_result(w, "not_assigned", None)
+            result = get_worker().call(
+                "view_my_tee_times",
+                request_id="watch",
+                action="my_tee_times",
+                tvn_username=w["username"],
+                tvn_password=user["tvn_password"],
+                golf_password=user["golf_password"],
+            )
+            if not result.get("success"):
+                if request_watches.bump_attempt(w["id"]):  # retries exhausted
+                    request_watches.mark_result(w["id"], "unknown")
+            else:
+                reservations = result.get("reservations", []) or []
+                matched = request_watches.matching_reservation(w, reservations)
+                if matched:
+                    request_watches.mark_result(w["id"], "matched", matched)
+                elif request_watches.bump_attempt(
+                    w["id"], allow_exhaust=request_watches.assignment_grace_passed(w)
+                ):
+                    # Absence or incomplete details do not prove a lottery loss.
+                    request_watches.mark_result(w["id"], "unknown")
+        if index < len(due) - 1:
+            _watch_pause()
 
 
 def _request_watch_loop():
     time.sleep(30)  # let startup settle before the first pass
     while True:
-        try:
-            _run_due_request_checks()
-        except Exception:
-            app.logger.exception("request_watch.loop_error")
+        # Each pass is isolated so one raising pass cannot skip the others
+        # for a whole loop interval.
+        for step in (_run_due_request_checks, _send_pending_request_notifications, _send_pending_outbox):
+            try:
+                step()
+            except Exception:
+                app.logger.exception("request_watch.loop_error step=%s", step.__name__)
         time.sleep(_WATCH_INTERVAL_SECONDS)
 
 
@@ -459,7 +590,7 @@ def require_auth():
 
 def _request_id():
     incoming = (request.headers.get("X-Request-ID") or "").strip()
-    return incoming or uuid.uuid4().hex[:12]
+    return incoming if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", incoming) else uuid.uuid4().hex[:12]
 
 
 def _get_session_user():
@@ -484,14 +615,15 @@ def _const_eq(stored, supplied):
     """Constant-time string comparison to avoid login timing side-channels."""
     if stored is None or supplied is None:
         return False
-    return hmac.compare_digest(str(stored), str(supplied))
+    return hmac.compare_digest(str(stored).encode(), str(supplied).encode())
 
 
 def _parse_booking_inputs(data, require_course_time=False):
     """Validate and normalize booking/search payload from frontend."""
     date_str = (data.get("date") or "").strip()
+    date_str = request_watches.normalize_play_date(date_str)
     if not date_str:
-        return None, "Date is required."
+        return None, "A valid play date is required."
 
     course_type = (data.get("course_type") or "").strip()
     if course_type not in {"Executive", "Championship"}:
@@ -508,14 +640,24 @@ def _parse_booking_inputs(data, require_course_time=False):
         num_golfers = int(data.get("num_golfers"))
     except (TypeError, ValueError):
         return None, "Number of golfers is required."
-    if num_golfers <= 0:
-        return None, "Number of golfers must be at least 1."
+    if not 1 <= num_golfers <= 4:
+        return None, "Select between 1 and 4 golfers."
     if num_golfers != len(golfer_ids):
         return None, "Number of golfers must match selected golfers."
+    if len(set(golfer_ids)) != len(golfer_ids) or any(not re.fullmatch(r"\d{1,20}", g) for g in golfer_ids):
+        return None, "Select distinct, valid golfer IDs."
+    if not isinstance(data.get("has_guests", False), bool):
+        return None, "Guest selection must be yes or no."
+    start, end = data.get("time_from", ""), data.get("time_to", "")
+    if any(t and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", t) for t in (start, end)):
+        return None, "Use HH:MM for the time window."
+    if start and end and start > end:
+        return None, "Earliest time must precede latest time."
 
     region_filter = (data.get("region_filter") or "all").strip().lower()
-    if region_filter not in {"all", "north", "central", "south"}:
-        return None, "Region must be north, central, south, or all."
+    if region_filter not in ({"all"} | BAND_KEYS):
+        allowed = ", ".join(["all", *sorted(BAND_KEYS)])
+        return None, f"Region must be one of: {allowed}."
 
     parsed = {
         "date_str": date_str,
@@ -524,6 +666,7 @@ def _parse_booking_inputs(data, require_course_time=False):
         "golfer_ids": golfer_ids,
         "num_golfers": num_golfers,
         "has_guests": bool(data.get("has_guests", False)),
+        "time_from": start, "time_to": end,
     }
 
     if require_course_time:
@@ -537,6 +680,50 @@ def _parse_booking_inputs(data, require_course_time=False):
     return parsed, None
 
 
+def _today_et():
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+_BODYLESS_API_POSTS = frozenset({"/api/logout", "/api/refresh-buddies"})
+
+
+@app.before_request
+def validate_api_json():
+    """Reject malformed payloads before they reach slow browser operations."""
+    if request.method != "POST" or not request.path.startswith("/api/"):
+        return None
+    if request.path in _BODYLESS_API_POSTS and not request.data:
+        return None
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "ok": False, "error": "Send a JSON object."}), 400
+    strings = {"username", "password", "golf_pin", "date", "date_label", "course_type", "course",
+               "time", "time_filter", "time_from", "time_to", "region_filter", "search_id", "play_date",
+               "preference", "time_to_play", "earliest_time", "latest_time", "reservation_no",
+               "request_id", "course_id", "email", "id", "name"}
+    for key in strings.intersection(data):
+        if data[key] is None:
+            # An empty optional field arrives as null from the page; the
+            # route-level parser decides whether the field was required.
+            continue
+        if not isinstance(data[key], str) or len(data[key]) > 512:
+            return jsonify({"success": False, "ok": False, "error": f"Invalid {key.replace('_', ' ')}."}), 400
+    for key in ("has_guests", "any_course"):
+        if key in data and not isinstance(data[key], bool):
+            return jsonify({"success": False, "error": f"Invalid {key.replace('_', ' ')}."}), 400
+
+
+@app.after_request
+def api_cache_policy(response):
+    if request.path.startswith("/api/") and response.mimetype != "image/png":
+        response.headers["Cache-Control"] = "no-store"
+    if request.path == "/":
+        response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 # ── Email notification helper ────────────────────────────────────────────────
 def _user_email(user_data):
     """Return the preferred notification email for a user record."""
@@ -547,14 +734,21 @@ def _user_email(user_data):
     ).strip()
 
 
-def _send_booking_emails(date_label, golfer_ids, booking_result,
-                         course_name, request_id, booking_username=None):
-    """Send confirmation emails.
+def _booking_recipients(golfer_ids, booking_result, course_name, booking_username):
+    """Return one entry per distinct recipient email for a booking confirmation.
 
-    Sends to: (1) the user who made the booking, and (2) any other registered
-    user whose primary golfer ID is in the booking."""
-    res_no = booking_result.get("reservation_no", "—")
+    Recipients are: (1) the user who made the booking, and (2) any other
+    registered user whose primary golfer ID is in the booking. Golfer display
+    names are resolved once, here, and frozen into each entry's payload -- a
+    later buddy-list rename does not change what was booked. Each entry is
+    ``{"username", "email", "payload"}``, where payload is ready to pass as
+    ``**payload`` to ``send_booking_confirmation``.
+    """
+    res_no = booking_result.get("reservation_no", "N/A")
     display_time = booking_result.get("display_time", "")
+    date_label = booking_result.get("date_label") or request_watches.friendly_date(
+        booking_result.get("play_date")
+    )
 
     users_snapshot = _all_users()
 
@@ -563,7 +757,7 @@ def _send_booking_emails(date_label, golfer_ids, booking_result,
     for gid in golfer_ids:
         for u in users_snapshot.values():
             matched = next(
-                (b["name"] for b in u.get("buddies", []) if b["id"] == str(gid)),
+                (b.get("name") for b in u.get("buddies", []) if b.get("id") == str(gid)),
                 None,
             )
             if matched:
@@ -571,37 +765,181 @@ def _send_booking_emails(date_label, golfer_ids, booking_result,
                 break
 
     golfer_id_strs = [str(g) for g in golfer_ids]
-    emails_sent = set()
+    payload = {
+        "reservation_no": res_no, "course": course_name, "display_time": display_time,
+        "date_label": date_label, "golfer_names": golfer_names,
+    }
 
-    def _notify(email):
-        """Send a booking confirmation to one email address."""
-        if email in emails_sent:
+    recipients = []
+    seen_emails = set()
+
+    def _add(username, email):
+        if not email or email in seen_emails:
             return
-        emails_sent.add(email)
-        send_booking_confirmation(
-            email, res_no, course_name, display_time,
-            date_label, golfer_names,
-        )
+        seen_emails.add(email)
+        recipients.append({"username": username, "email": email, "payload": dict(payload)})
 
     # Always notify the user who made the booking
     if booking_username and booking_username in users_snapshot:
-        email = _user_email(users_snapshot[booking_username])
-        if email:
-            _notify(email)
-            app.logger.info("email.sent_booking_user request_id=%s user=%s", request_id, booking_username)
+        _add(booking_username, _user_email(users_snapshot[booking_username]))
 
     # Also notify any other registered user whose primary ID is in the booking
     for uname, udata in users_snapshot.items():
-        email = _user_email(udata)
-        if not email:
-            continue
         primary_id = (udata.get("primary") or {}).get("id")
         if primary_id and str(primary_id) in golfer_id_strs:
-            _notify(email)
-            app.logger.info("email.sent_golfer request_id=%s user=%s", request_id, uname)
+            _add(uname, _user_email(udata))
+
+    return recipients
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+@app.route("/api/courses", methods=["GET"])
+def course_catalog():
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+    try:
+        from mapping_service import CatalogUnavailable, get_courses
+        courses = get_courses()
+    except CatalogUnavailable as exc:
+        app.logger.error("catalog.unavailable request_id=%s error=%s", request_id, exc)
+        return jsonify({"success": False, "error": "Course catalog is unavailable right now."}), 503
+    return jsonify({"success": True, "courses": courses})
+
+
+@app.route("/api/preferences", methods=["GET", "POST"])
+def preferences_route():
+    err = require_auth()
+    if err:
+        return err
+    user = _get_session_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Please sign in again."}), 401
+    if request.method == "GET":
+        return jsonify({"ok": True, "preferences": website_preferences.get_preferences(user)})
+    request_id = _request_id()
+    try:
+        from mapping_service import CatalogUnavailable, get_courses
+        course_ids = {c["id"] for c in get_courses()}
+    except CatalogUnavailable as exc:
+        app.logger.error("catalog.unavailable request_id=%s error=%s", request_id, exc)
+        return jsonify({"ok": False, "error": "Course catalog is unavailable right now."}), 503
+    try:
+        changes = website_preferences.validate_preferences(request.get_json(), user, course_ids)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    def update(profile):
+        latest = website_preferences.get_preferences(profile)
+        latest.update(changes)
+        profile["preferences"] = latest
+    saved = user_store.update_user(session["username"], update)
+    if not saved:
+        return jsonify({"ok": False, "error": "Please sign in again."}), 401
+    return jsonify({"ok": True, "preferences": website_preferences.get_preferences(saved)})
+
+
+_route_attempts = {}
+_route_lock = threading.Lock()
+
+
+def _mapping_rate_limited(username):
+    """Return True when this user has made 80+ mapping calls in the last 60s.
+
+    Shared by every mapping endpoint (routes and map imagery) so one process-
+    local per-user budget covers both, matching the docstring in AGENTS.md
+    that describes an 80 requests/user/minute mapping limit.
+    """
+    now = time.monotonic()
+    with _route_lock:
+        for key in list(_route_attempts):
+            if now - _route_attempts[key][0] > 60:
+                del _route_attempts[key]
+        started, count = _route_attempts.get(username, (now, 0))
+        if count >= 80:
+            return True
+        _route_attempts[username] = (started, count + 1)
+    return False
+
+
+@app.route("/api/course-route", methods=["POST"])
+def course_route():
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+    if not _get_session_user():
+        return jsonify({"success": False, "error": "Please sign in again."}), 401
+    username = session["username"]
+    if _mapping_rate_limited(username):
+        return jsonify({"success": False, "error": "Please wait a minute before calculating more routes."}), 429
+    data = request.get_json()
+    try:
+        origin = website_preferences.validate_origin(data.get("origin"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    try:
+        from mapping_service import CatalogUnavailable, route_to_course
+        result = route_to_course(origin, data.get("course_id", ""))
+    except CatalogUnavailable as exc:
+        app.logger.error("catalog.unavailable request_id=%s error=%s", request_id, exc)
+        return jsonify({"success": False, "error": "Course catalog is unavailable right now."}), 503
+    except Exception:
+        app.logger.exception("route.failed request_id=%s", request_id)
+        return jsonify({"success": False, "error": "Route preview is unavailable right now."}), 502
+    if result.get("success"):
+        return jsonify(result), 200
+    if result.get("error") == "unknown course":
+        return jsonify(result), 404
+    return jsonify(result), 502
+
+
+@app.route("/api/map-image", methods=["GET"])
+def map_image_route():
+    """Serve a proxied basemap image tile for the given bounds and pixel size.
+
+    Maps use a separate service and never touch the Playwright golf worker.
+    """
+    request_id = _request_id()
+    err = require_auth()
+    if err:
+        return err
+    if not _get_session_user():
+        return jsonify({"success": False, "error": "Please sign in again."}), 401
+    username = session["username"]
+
+    try:
+        bounds = {
+            "min_lon": float(request.args["min_lon"]),
+            "min_lat": float(request.args["min_lat"]),
+            "max_lon": float(request.args["max_lon"]),
+            "max_lat": float(request.args["max_lat"]),
+        }
+        width = int(request.args["w"])
+        height = int(request.args["h"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid map request."}), 400
+    if _mapping_rate_limited(username):
+        return jsonify({"success": False, "error": "Please wait a minute before requesting more map imagery."}), 429
+
+    try:
+        from mapping_service import CatalogUnavailable, map_image
+        png_bytes, error, status = map_image(bounds, width, height)
+    except CatalogUnavailable as exc:
+        app.logger.error("catalog.unavailable request_id=%s error=%s", request_id, exc)
+        return jsonify({"success": False, "error": "Course catalog is unavailable right now."}), 503
+    except Exception:
+        app.logger.exception("map.failed request_id=%s", request_id)
+        return jsonify({"success": False, "error": "Map imagery is unavailable right now."}), 502
+    if error is not None:
+        return jsonify({"success": False, "error": error}), status
+
+    response = Response(png_bytes, mimetype="image/png")
+    response.headers["Cache-Control"] = "private, max-age=21600"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @app.route("/")
 def index():
     return send_from_directory("templates", "index.html")
@@ -643,12 +981,14 @@ def get_session():
         return jsonify({
             "auth": True,
             "username": username,
+            "play_date": _today_et(),
             "display_name": user.get("display_name", username),
             "primary": user.get("primary"),
             "buddies": user.get("buddies", []),
             "email": _user_email(user),
         })
-    return jsonify({"auth": True, "username": None})
+    session.clear()
+    return jsonify({"auth": False})
 
 
 @app.route("/api/login-user", methods=["POST"])
@@ -678,6 +1018,8 @@ def login_user():
         _clear_login_attempts(rate_key)
         return jsonify({
             "ok": True,
+            "username": username,
+            "play_date": _today_et(),
             "display_name": user.get("display_name", username),
             "primary": user.get("primary"),
             "buddies": user.get("buddies", []),
@@ -751,6 +1093,7 @@ def register_user():
         "primary": primary,
         "buddies": buddies,
         "email": email or (_user_email(existing) if existing else ""),
+        "preferences": website_preferences.get_preferences(existing or {}),
     }
     _set_user(tvn_username, user_data)
     _set_authenticated_user(tvn_username)
@@ -761,6 +1104,8 @@ def register_user():
     )
     return jsonify({
         "ok": True,
+        "username": tvn_username,
+        "play_date": _today_et(),
         "display_name": display_name,
         "primary": primary,
         "buddies": buddies,
@@ -792,16 +1137,17 @@ def refresh_buddies():
     if not result.get("success"):
         return jsonify({"ok": False, "error": result.get("error", "Failed to refresh.")}), 400
 
-    # Merge: keep manually-added buddies that aren't in the fresh scrape
-    fresh_buddies = result.get("buddies", [])
-    scraped_ids = {b["id"] for b in fresh_buddies}
-    for old_buddy in user.get("buddies", []):
-        if old_buddy["id"] not in scraped_ids:
-            fresh_buddies.append(old_buddy)
-
-    user["primary"] = result.get("primary")
-    user["buddies"] = fresh_buddies
-    _set_user(username, user)
+    def merge_buddies(profile):
+        fresh_buddies = list(result.get("buddies", []))
+        scraped_ids = {b["id"] for b in fresh_buddies}
+        for old_buddy in profile.get("buddies", []):
+            if old_buddy["id"] not in scraped_ids:
+                fresh_buddies.append(old_buddy)
+        profile["primary"] = result.get("primary")
+        profile["buddies"] = fresh_buddies
+    user = user_store.update_user(username, merge_buddies)
+    if not user:
+        return jsonify({"ok": False, "error": "Please sign in again."}), 401
 
     return jsonify({"ok": True, "primary": user["primary"], "buddies": user["buddies"]})
 
@@ -831,8 +1177,13 @@ def add_buddy():
 
     from golf_service import _initials
     buddy = {"id": golfer_id, "name": golfer_name, "initials": _initials(golfer_name)}
-    user.setdefault("buddies", []).append(buddy)
-    _set_user(username, user)
+    def append_buddy(profile):
+        buddies = profile.setdefault("buddies", [])
+        if not any(b["id"] == golfer_id for b in buddies):
+            buddies.append(buddy)
+    user = user_store.update_user(username, append_buddy)
+    if not user:
+        return jsonify({"ok": False, "error": "Please sign in again."}), 401
 
     return jsonify({"ok": True, "buddy": buddy, "buddies": user["buddies"]})
 
@@ -850,8 +1201,10 @@ def update_email():
 
     data = request.get_json() or {}
     email = (data.get("email") or "").strip()
-    user["email"] = email
-    _set_user(username, user)
+    if email and (len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
+        return jsonify({"ok": False, "error": "Enter a valid email address."}), 400
+    if not user_store.update_user(username, lambda u: u.update(email=email)):
+        return jsonify({"ok": False, "error": "Please sign in again."}), 401
 
     return jsonify({"ok": True, "email": email})
 
@@ -873,6 +1226,7 @@ def remove_user():
     _delete_user(username)
     try:
         request_watches.cancel_watches_for_user(username)
+        request_watches.cancel_outbox_for_user(username)
     except Exception:
         pass
     session.clear()
@@ -923,6 +1277,16 @@ def get_tee_times():
         has_guests   = parsed["has_guests"],
         time_filter  = data.get("time_filter"),
     )
+    if result.get("success") and (parsed["time_from"] or parsed["time_to"]):
+        from golf_service import _parse_time, _to_real_hour
+        def in_window(item):
+            hour, minute = _parse_time(item.get("time", ""))
+            if hour < 0 or minute < 0:
+                return False
+            value = f"{_to_real_hour(hour):02d}:{minute:02d}"
+            return ((not parsed["time_from"] or value >= parsed["time_from"])
+                    and (not parsed["time_to"] or value <= parsed["time_to"]))
+        result["times"] = [item for item in result.get("times", []) if in_window(item)]
     elapsed_ms = int((time.monotonic() - started) * 1000)
     app.logger.info(
         "api.done request_id=%s action=tee_times duration_ms=%s success=%s count=%s",
@@ -1003,7 +1367,10 @@ def delete_reservation():
         tvn_password=user["tvn_password"],
         golf_password=user["golf_password"],
         reservation_no=reservation_no,
+        exclusive_key=username,
     )
+    if result.get("busy"):
+        return jsonify(result), 409
     elapsed_ms = int((time.monotonic() - started) * 1000)
     app.logger.info(
         "api.done request_id=%s action=delete_reservation duration_ms=%s success=%s",
@@ -1030,10 +1397,13 @@ def book_tee_time():
         return jsonify({"success": False, "error": "No user selected."}), 400
 
     data = request.get_json() or {}
-    course_name = (data.get("course") or "").strip()
-    time_str = (data.get("time") or "").strip()
-    if not course_name or not time_str:
-        return jsonify({"success": False, "error": "Course and time are required."}), 400
+    parsed, parse_err = _parse_booking_inputs(data, require_course_time=True)
+    if parse_err:
+        return jsonify({"success": False, "error": parse_err}), 400
+    search_id = data.get("search_id", "").strip()
+    if not search_id:
+        return jsonify({"success": False, "error": "Refresh the page and fetch tee times again before booking."}), 400
+    course_name, time_str = parsed["course_name"], parsed["time_str"]
 
     app.logger.info(
         "api.start request_id=%s action=book user=%s course=%s time=%s",
@@ -1042,11 +1412,6 @@ def book_tee_time():
         course_name,
         time_str,
     )
-    data_date_label = (data.get("date_label") or "").strip()
-    data_golfer_ids = data.get("golfer_ids") or []
-    data_date = (data.get("date") or "").strip()
-    data_num_golfers = data.get("num_golfers")
-
     result = get_worker().call(
         "book_tee_time",
         request_id=request_id,
@@ -1056,13 +1421,16 @@ def book_tee_time():
         golf_password=user["golf_password"],
         course_name=course_name,
         time_str=time_str,
-        # Validated server-side against the session's search context so we can't
-        # book a stale row after the golfer changed date/golfers without
-        # re-fetching. Skipped when the frontend omits them (backward compatible).
-        expected_date=data_date or None,
-        expected_golfer_ids=data_golfer_ids or None,
-        expected_num_golfers=data_num_golfers,
+        expected_date=parsed["date_str"],
+        expected_golfer_ids=parsed["golfer_ids"],
+        expected_num_golfers=parsed["num_golfers"],
+        expected_course_type=parsed["course_type"],
+        expected_has_guests=parsed["has_guests"],
+        search_id=search_id,
+        exclusive_key=username,
     )
+    if result.get("busy"):
+        return jsonify(result), 409
     elapsed_ms = int((time.monotonic() - started) * 1000)
     app.logger.info(
         "api.done request_id=%s action=book duration_ms=%s success=%s",
@@ -1071,29 +1439,31 @@ def book_tee_time():
         bool(result.get("success")),
     )
 
-    # Send confirmation emails on success — fire-and-forget on a background
-    # thread so a slow or failing mail call never blocks (or crashes) the
-    # request worker. The booking is already committed at this point.
+    # Enqueue confirmation emails on success into the durable outbox
+    # (synchronously, before returning) so a booking that already committed
+    # can never lose its confirmation to a crashed or timed-out send: a
+    # background pass, or the loop's own next pass, retries it later. The
+    # booking is already committed at this point, so nothing here may turn
+    # a successful booking into a failed response: any problem building or
+    # enqueuing the confirmation is logged and swallowed.
     if result.get("success"):
-        app.logger.info(
-            "email.trigger request_id=%s golfer_ids=%s",
-            request_id, data_golfer_ids,
-        )
-
-        def _email_task():
-            try:
-                _send_booking_emails(
-                    data_date_label, data_golfer_ids, result,
-                    course_name, request_id, booking_username=username,
+        try:
+            recipients = _booking_recipients(
+                result.get("golfer_ids", []), result, result.get("course", course_name), username,
+            )
+            for recipient in recipients:
+                request_watches.enqueue_notification(
+                    "booking_confirmation", recipient["username"], recipient["email"], recipient["payload"],
                 )
-            except Exception as e:
-                app.logger.warning("email.notification_error request_id=%s error=%s", request_id, e)
-
-        threading.Thread(
-            target=_email_task,
-            name=f"email-{request_id}",
-            daemon=True,
-        ).start()
+            app.logger.info("email.enqueued request_id=%s count=%d", request_id, len(recipients))
+            if os.environ.get("DISABLE_REQUEST_WATCHER") != "1":
+                threading.Thread(
+                    target=_send_pending_outbox,
+                    name=f"outbox-{request_id}",
+                    daemon=True,
+                ).start()
+        except Exception:
+            app.logger.exception("email.enqueue_failed request_id=%s", request_id)
 
     return jsonify(result)
 
@@ -1116,8 +1486,8 @@ def request_courses():
     play_date = (data.get("play_date") or "").strip()
     course_type = (data.get("course_type") or "Championship").strip()
     any_course = bool(data.get("any_course") or False)
-    if not play_date:
-        return jsonify({"success": False, "error": "Play date is required."}), 400
+    if not request_watches.normalize_play_date(play_date):
+        return jsonify({"success": False, "error": "A valid play date is required."}), 400
     if course_type not in ("Championship", "Executive"):
         return jsonify({"success": False, "error": "Invalid course type."}), 400
 
@@ -1159,8 +1529,8 @@ def submit_request_route():
     except (TypeError, ValueError):
         max_golfers = 0
 
-    if not play_date:
-        return jsonify({"success": False, "error": "Play date is required."}), 400
+    if not request_watches.normalize_play_date(play_date):
+        return jsonify({"success": False, "error": "A valid play date is required."}), 400
     if max_golfers < 1 or max_golfers > 4:
         return jsonify({"success": False, "error": "Max golfers must be between 1 and 4."}), 400
     if course_type not in ("Championship", "Executive"):
@@ -1171,6 +1541,20 @@ def submit_request_route():
         return jsonify({"success": False, "error": "At least one course must be selected."}), 400
     if not isinstance(golfer_ids, list) or not golfer_ids:
         return jsonify({"success": False, "error": "At least one golfer is required."}), 400
+    golfer_ids = [str(g).strip() for g in golfer_ids]
+    if (len(golfer_ids) > max_golfers or len(set(golfer_ids)) != len(golfer_ids)
+            or any(not re.fullmatch(r"\d{1,20}", g) for g in golfer_ids)):
+        return jsonify({"success": False, "error": "Choose distinct golfers within the selected maximum."}), 400
+    if len(course_choices) > 100 or any(not isinstance(c, str) or not c.strip() or len(c) > 200 for c in course_choices):
+        return jsonify({"success": False, "error": "Choose valid courses from the course list."}), 400
+    course_choices = list(dict.fromkeys(c.strip() for c in course_choices))
+    time_to_play = data.get("time_to_play", "").strip()
+    earliest_time = data.get("earliest_time", "").strip()
+    latest_time = data.get("latest_time", "").strip()
+    if any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) for value in (time_to_play, earliest_time, latest_time)):
+        return jsonify({"success": False, "error": "Choose a preferred time, earliest time, and latest time."}), 400
+    if not earliest_time <= time_to_play <= latest_time:
+        return jsonify({"success": False, "error": "Preferred time must fall between earliest and latest time."}), 400
 
     result = get_worker().call(
         "submit_request",
@@ -1184,13 +1568,16 @@ def submit_request_route():
         has_guests=bool(data.get("has_guests") or False),
         course_type=course_type,
         any_course=bool(data.get("any_course") or False),
-        time_to_play=(data.get("time_to_play") or "").strip(),
-        earliest_time=(data.get("earliest_time") or "").strip(),
-        latest_time=(data.get("latest_time") or "").strip(),
+        time_to_play=time_to_play,
+        earliest_time=earliest_time,
+        latest_time=latest_time,
         preference=preference,
         course_choices=[str(c).strip() for c in course_choices if str(c).strip()],
         golfer_ids=[str(g).strip() for g in golfer_ids if str(g).strip()],
+        exclusive_key=username,
     )
+    if result.get("busy"):
+        return jsonify(result), 409
 
     # Auto-enroll the request for result notification: after the ~1 AM lottery
     # (3 days before play) we'll check whether it was assigned and email the user.
@@ -1203,6 +1590,8 @@ def submit_request_route():
                 play_date_label=request_watches.friendly_date(play_date),
                 courses=course_choices,
                 email=_user_email(user),
+                preferences={"earliest_time": earliest_time, "latest_time": latest_time,
+                             "golfer_ids": golfer_ids, "any_course": data.get("any_course", False)},
             )
         except Exception as e:
             app.logger.warning("request_watch.enroll_error request_id=%s error=%s", request_id, e)
@@ -1278,7 +1667,12 @@ def delete_request_route():
         tvn_password=user["tvn_password"],
         golf_password=user["golf_password"],
         target_request_id=rid,
+        exclusive_key=username,
     )
+    if result.get("busy"):
+        return jsonify(result), 409
+    if result.get("success"):
+        request_watches.cancel_request_watch(username, rid)
     return jsonify(result)
 
 

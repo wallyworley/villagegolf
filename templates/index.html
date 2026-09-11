@@ -7,6 +7,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="theme-color" content="#14532d"/>
   <title>Village Fairways</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
+  <link rel="stylesheet" href="/static/css/experience.css"/>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -164,9 +166,13 @@
     .tile-ico { font-size:24px; margin-bottom:5px; }
     .tile-lbl { font-size:13px; font-weight:700; }
     .tile-sub { font-size:11px; color:var(--muted); margin-top:2px; }
-    /* Region pills: single-word labels, vertically centered, no wrap. */
+    /* Area band pills: "Any area" spans the top row, the four bands sit two by
+       two below it. Labels vary in length ("North of 466" vs "Between the
+       6s"), so they wrap instead of truncating at narrow widths. */
+    .region-row { display:grid; grid-template-columns:repeat(2,1fr); gap:9px; }
+    #r-all { grid-column:1 / -1; }
     .region-row .tile { padding:13px 6px; display:flex; align-items:center; justify-content:center; min-height:46px; }
-    .region-row .tile-lbl { white-space:nowrap; }
+    .region-row .tile-lbl { white-space:normal; }
 
     /* Shared form field label (Requests tab) — replaces repeated inline styles. */
     .field { margin-bottom:14px; }
@@ -501,6 +507,7 @@
     <button class="app-tab active" id="tab-book" onclick="showAppView('book')">Book Tee Time</button>
     <button class="app-tab" id="tab-mytimes" onclick="showAppView('mytimes')">My Tee Times</button>
     <button class="app-tab" id="tab-request" onclick="showAppView('request')">Requests</button>
+    <button class="app-tab" id="tab-courses" onclick="showAppView('courses')">Courses</button>
   </div>
 
   <div class="app-view active" id="view-book">
@@ -530,31 +537,34 @@
       <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Add golfers first</span>
     </div>
     <div class="two" style="margin-bottom:14px;">
-      <div class="tile" id="t-exec" onclick="setCourse('Executive')">
+      <button type="button" class="tile" id="t-exec" onclick="setCourse('Executive')">
         <div class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></div><div class="tile-lbl">Executive</div><div class="tile-sub">Shorter course</div>
-      </div>
-      <div class="tile" id="t-champ" onclick="setCourse('Championship')">
+      </button>
+      <button type="button" class="tile" id="t-champ" onclick="setCourse('Championship')">
         <div class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></div><div class="tile-lbl">Championship</div><div class="tile-sub">Full 18 holes</div>
-      </div>
+      </button>
     </div>
     <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Region</div>
-    <div class="four region-row" style="margin-bottom:14px;">
-      <div class="tile on" id="r-all" onclick="setRegion('all')">
-        <div class="tile-lbl">All</div>
-      </div>
-      <div class="tile" id="r-north" onclick="setRegion('north')">
-        <div class="tile-lbl">North</div>
-      </div>
-      <div class="tile" id="r-central" onclick="setRegion('central')">
-        <div class="tile-lbl">Central</div>
-      </div>
-      <div class="tile" id="r-south" onclick="setRegion('south')">
-        <div class="tile-lbl">South</div>
-      </div>
+    <div class="region-row" style="margin-bottom:14px;">
+      <button type="button" class="tile on" id="r-all" onclick="setRegion('all')">
+        <div class="tile-lbl">Any area</div>
+      </button>
+      <button type="button" class="tile" id="r-north-of-466" onclick="setRegion('north-of-466')">
+        <div class="tile-lbl">North of 466</div>
+      </button>
+      <button type="button" class="tile" id="r-between-the-6s" onclick="setRegion('between-the-6s')">
+        <div class="tile-lbl">Between the 6s</div>
+      </button>
+      <button type="button" class="tile" id="r-south-of-466a" onclick="setRegion('south-of-466a')">
+        <div class="tile-lbl">South of 466A</div>
+      </button>
+      <button type="button" class="tile" id="r-south-of-turnpike" onclick="setRegion('south-of-turnpike')">
+        <div class="tile-lbl">South of the Turnpike</div>
+      </button>
     </div>
     <div class="tog-row">
       <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
-      <label class="sw"><input type="checkbox" id="guestTog" onchange="S.guests=this.checked"/><span class="sw-track"></span></label>
+      <label class="sw"><input type="checkbox" id="guestTog" onchange="guestChanged(this.checked)"/><span class="sw-track"></span></label>
     </div>
   </div>
 
@@ -564,11 +574,19 @@
       <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Choose a course first</span>
     </div>
     <div class="time-grid five">
-      <div class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico"><svg class="ic"><use href="#i-clock"/></svg></span><div class="t-lbl">Any Time</div><div class="t-range">&#183; Show all</div></div>
-      <div class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunrise"/></svg></span><div class="t-lbl">Early Bird</div><div class="t-range">Before 9am</div></div>
-      <div class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico"><svg class="ic"><use href="#i-sun"/></svg></span><div class="t-lbl">Morning</div><div class="t-range">9am &#8211; noon</div></div>
-      <div class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-cloudsun"/></svg></span><div class="t-lbl">Midday</div><div class="t-range">Noon &#8211; 2pm</div></div>
-      <div class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunset"/></svg></span><div class="t-lbl">Afternoon</div><div class="t-range">After 2pm</div></div>
+      <button type="button" class="t-tile t-wide" data-filter="all" onclick="setTime('all',this)"><span class="t-ico"><svg class="ic"><use href="#i-clock"/></svg></span><span class="t-lbl">Any Time</span><span class="t-range">&#183; Show all</span></button>
+      <button type="button" class="t-tile" data-filter="before 9am" onclick="setTime('before 9am',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunrise"/></svg></span><span class="t-lbl">Early Bird</span><span class="t-range">Before 9am</span></button>
+      <button type="button" class="t-tile" data-filter="9am – noon" onclick="setTime('9am &#8211; noon',this)"><span class="t-ico"><svg class="ic"><use href="#i-sun"/></svg></span><span class="t-lbl">Morning</span><span class="t-range">9am &#8211; noon</span></button>
+      <button type="button" class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-cloudsun"/></svg></span><span class="t-lbl">Midday</span><span class="t-range">Noon &#8211; 2pm</span></button>
+      <button type="button" class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunset"/></svg></span><span class="t-lbl">Afternoon</span><span class="t-range">After 2pm</span></button>
+    </div>
+    <div class="exact-time-panel">
+      <div class="exact-time-heading">Optional exact window</div>
+      <div class="time-window-fields">
+        <label>From<input id="search-time-from" type="time" onchange="exactTimeChanged()"/></label>
+        <label>To<input id="search-time-to" type="time" onchange="exactTimeChanged()"/></label>
+      </div>
+      <div class="field-help">Leave both blank to use the preference above.</div>
     </div>
   </div>
 
@@ -624,6 +642,71 @@
   </div>
   </div>
 
+  <div class="app-view" id="view-courses">
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-flag"/></svg></div>
+        <div><div class="sec-title">Course Finder</div><div class="sec-sub">Explore verified Villages golf locations</div></div>
+      </div>
+      <label class="field-label" for="course-search">Search courses or areas</label>
+      <input id="course-search" class="field-input" type="search" placeholder="Try Belle Glade or Spanish Springs" oninput="renderCourseExplorer()"/>
+      <div class="course-filter-row" aria-label="Course filters">
+        <select id="course-type-filter" class="field-input" onchange="renderCourseExplorer()" aria-label="Course type">
+          <option value="all">All types</option><option>Executive</option><option>Championship</option>
+        </select>
+        <select id="course-region-filter" class="field-input" onchange="renderCourseExplorer()" aria-label="Area">
+          <option value="all">All areas</option><option>North of 466</option><option>Between the 6s</option><option>South of 466A</option><option>South of the Turnpike</option>
+        </select>
+        <label class="favorite-filter"><input id="course-favorites-only" type="checkbox" onchange="renderCourseExplorer()"/> Favorites</label>
+      </div>
+      <div class="course-map-wrap">
+        <div id="course-map" class="course-map" role="img" aria-label="Map of course locations" aria-describedby="map-help"></div>
+      </div>
+      <p id="map-help" class="visually-hidden">Pinch or use the buttons to zoom, drag to move the map, and press and hold to save a starting location. Map imagery from The Villages map service.</p>
+      <p class="map-note">Pinch or use the buttons to zoom, drag to move the map, and press and hold to save a starting location. Map imagery from The Villages map service.</p>
+      <div id="course-explorer-status" class="mytimes-status" aria-live="polite"></div>
+      <div id="course-list" class="course-list"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
+        <div><div class="sec-title">My Travel Preferences</div><div class="sec-sub">Used for route estimates on this account</div></div>
+      </div>
+      <div class="home-summary" id="home-summary">No starting location saved.</div>
+      <div class="preference-actions">
+        <button type="button" class="secondary-btn" onclick="useCurrentLocation(true)">Use my current location</button>
+        <button type="button" class="secondary-btn" id="clear-home-btn" onclick="clearSavedHome()">Clear saved location</button>
+      </div>
+      <div class="field-help">Location access is requested only when you tap the button. You can also press and hold the course map to set an approximate starting point.</div>
+      <div class="preference-grid">
+        <label class="field-label">Arrival buffer (minutes)<input id="arrival-buffer" class="field-input" type="number" min="0" max="180" step="5" onchange="savePreferenceFields()"/></label>
+        <label class="field-label">Maximum cart time (optional)<input id="max-cart-minutes" class="field-input" type="number" min="1" max="240" placeholder="No limit" onchange="savePreferenceFields()"/></label>
+      </div>
+      <div id="preferences-status" class="contact-status" aria-live="polite"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-list"/></svg></div>
+        <div><div class="sec-title">Booking Presets</div><div class="sec-sub">Save the golfers and course choices from the booking form</div></div>
+      </div>
+      <div class="preset-row">
+        <select id="preset-select" class="field-input" onchange="applySelectedPreset()"><option value="">Choose a saved preset</option></select>
+        <button type="button" class="secondary-btn" onclick="deleteSelectedPreset()">Delete</button>
+      </div>
+      <div class="preset-row">
+        <input id="preset-name" class="field-input" maxlength="40" placeholder="Preset name, e.g. Tuesday group"/>
+        <button type="button" class="secondary-btn" onclick="saveCurrentPreset()">Save current choices</button>
+      </div>
+      <div id="preset-status" class="contact-status" aria-live="polite"></div>
+    </div>
+    <div class="sec">
+      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
+        <div><div class="sec-title">Account</div><div class="sec-sub">Keep the golfer list on this device up to date</div></div>
+      </div>
+      <button type="button" class="mytimes-btn" id="refresh-buddies-btn" onclick="refreshBuddyList()">Refresh golfer list</button>
+      <div id="refresh-buddies-status" class="contact-status" aria-live="polite"></div>
+    </div>
+  </div>
+
   <div class="app-view" id="view-request">
     <div class="sec">
       <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-doc"/></svg></div>
@@ -632,24 +715,24 @@
 
       <div style="margin-bottom:14px;">
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Play Date</label>
-        <input id="rq-date" type="date" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;font-size:15px;"/>
+        <input id="rq-date" type="date" onchange="requestInputsChanged()" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;font-size:15px;"/>
       </div>
 
       <div style="margin-bottom:14px;">
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Maximum Number of Golfers</label>
         <div class="four">
-          <div class="tile" id="rq-max-1" onclick="setRequestMax(1)"><div class="tile-lbl">1</div></div>
-          <div class="tile" id="rq-max-2" onclick="setRequestMax(2)"><div class="tile-lbl">2</div></div>
-          <div class="tile" id="rq-max-3" onclick="setRequestMax(3)"><div class="tile-lbl">3</div></div>
-          <div class="tile" id="rq-max-4" onclick="setRequestMax(4)"><div class="tile-lbl">4</div></div>
+          <button type="button" class="tile" id="rq-max-1" onclick="setRequestMax(1)"><span class="tile-lbl">1</span></button>
+          <button type="button" class="tile" id="rq-max-2" onclick="setRequestMax(2)"><span class="tile-lbl">2</span></button>
+          <button type="button" class="tile" id="rq-max-3" onclick="setRequestMax(3)"><span class="tile-lbl">3</span></button>
+          <button type="button" class="tile" id="rq-max-4" onclick="setRequestMax(4)"><span class="tile-lbl">4</span></button>
         </div>
       </div>
 
       <div style="margin-bottom:14px;">
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Type</label>
         <div class="two">
-          <div class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><div class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></div><div class="tile-lbl">Executive</div></div>
-          <div class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><div class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></div><div class="tile-lbl">Championship</div></div>
+          <button type="button" class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><span class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></span><span class="tile-lbl">Executive</span></button>
+          <button type="button" class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><span class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></span><span class="tile-lbl">Championship</span></button>
         </div>
       </div>
 
@@ -660,8 +743,9 @@
 
       <div class="tog-row" style="margin-bottom:14px;">
         <div class="tog-lbl">Any course?<small>Open to any course of the chosen type</small></div>
-        <label class="sw"><input type="checkbox" id="rq-anycourse"/><span class="sw-track"></span></label>
+        <label class="sw"><input type="checkbox" id="rq-anycourse" onchange="requestAnyCourseChanged(this.checked)"/><span class="sw-track"></span></label>
       </div>
+      <div class="any-course-note" id="rq-any-course-note">“Any course” lets the golf system assign a course outside your ranked choices when those choices are unavailable.</div>
 
       <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;">
         <div>
@@ -681,8 +765,8 @@
       <div style="margin-bottom:14px;">
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preference</label>
         <div class="two">
-          <div class="tile on" id="rq-pref-course" onclick="setRequestPref('Course')"><div class="tile-lbl">Course</div></div>
-          <div class="tile" id="rq-pref-time" onclick="setRequestPref('Time')"><div class="tile-lbl">Time</div></div>
+          <button type="button" class="tile on" id="rq-pref-course" onclick="setRequestPref('Course')"><span class="tile-lbl">Course</span></button>
+          <button type="button" class="tile" id="rq-pref-time" onclick="setRequestPref('Time')"><span class="tile-lbl">Time</span></button>
         </div>
       </div>
 
@@ -733,7 +817,7 @@
     </div>
   </div>
 
-  <div class="switch-user" onclick="switchUser()">&#8592; Switch Golfer</div>
+  <button type="button" class="switch-user switch-user-btn" onclick="switchUser()">Log out of this device</button>
 
 </div>
 </div>
@@ -761,6 +845,14 @@
       <button class="cs-delete" id="delete-confirm-btn" onclick="confirmDeleteReservation()">Delete All Players</button>
     </div>
   </div>
+</div>
+
+<div class="overlay centered-overlay" id="course-overlay" onclick="if(event.target===this)closeCourseModal()">
+  <section class="course-modal" role="dialog" aria-modal="true" aria-labelledby="course-modal-title" tabindex="-1">
+    <button type="button" class="modal-close" onclick="closeCourseModal()" aria-label="Close course details">&#10005;</button>
+    <div id="course-modal-content"></div>
+    <div id="route-panel" class="route-panel"></div>
+  </section>
 </div>
 
 <script>
@@ -1061,17 +1153,17 @@ function buildDates(){
   const FULL=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const grid=document.getElementById('dateGrid');
   grid.innerHTML='';
-  const today=new Date();
+  const today=new Date((window.__playDate||new Date().toISOString().slice(0,10))+'T12:00:00');
   const dateCards=[];
   for(let i=1;i<=3;i++){
     const d=new Date(today); d.setDate(today.getDate()+i);
     const yyyymmdd=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
     const isoDate=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const label=`${FULL[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-    const c=document.createElement('div'); c.className='d-card';
+    const c=document.createElement('button'); c.type='button'; c.className='d-card'; c.setAttribute('aria-pressed','false');
     c.dataset.offset=String(i);
     c.innerHTML=`<div class="d-dow">${DOW[d.getDay()]}</div><div class="d-dom">${d.getDate()}</div><div class="d-mon">${MON[d.getMonth()]}</div><div class="d-wx" id="wx-${isoDate}"></div>`;
-    c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>x.classList.remove('on')); c.classList.add('on'); S.date=yyyymmdd; S.dateLabel=label; clearResults(); unlock('sec-golfers'); checkFetch(); };
+    c.onclick=()=>{ document.querySelectorAll('.d-card').forEach(x=>{x.classList.remove('on');x.setAttribute('aria-pressed','false');}); c.classList.add('on'); c.setAttribute('aria-pressed','true'); S.date=yyyymmdd; S.dateLabel=label; clearResults(); unlock('sec-golfers'); checkFetch(); };
     grid.appendChild(c);
     dateCards.push(isoDate);
   }
@@ -1096,9 +1188,9 @@ function buildGolfers(){
   list.innerHTML='';
   S.golfers=[];
   BUDDIES.forEach(g=>{
-    const c=document.createElement('div'); c.className='g-card'; c.dataset.id=g.id;
+    const c=document.createElement('button'); c.type='button'; c.className='g-card'; c.dataset.id=g.id; c.setAttribute('aria-pressed','false');
     c.innerHTML=`<div class="g-av">${esc(g.initials||'?')}</div><div><div class="g-name">${esc(g.name)}</div><div class="g-id">ID ${esc(g.id)}</div></div><div class="g-chk">&#10003;</div>`;
-    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); clearResults(); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
+    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); c.setAttribute('aria-pressed',String(S.golfers.includes(g.id))); clearResults(); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
     list.appendChild(c);
   });
 }
@@ -1126,13 +1218,13 @@ async function addBuddy(){
   }catch(e){ showError('Connection error.'); }
 }
 
-function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); clearResults(); unlock('sec-time'); checkFetch(); }
+function setCourse(t){ S.course=t; document.getElementById('t-exec').classList.toggle('on',t==='Executive'); document.getElementById('t-exec').setAttribute('aria-pressed',String(t==='Executive')); document.getElementById('t-champ').classList.toggle('on',t==='Championship'); document.getElementById('t-champ').setAttribute('aria-pressed',String(t==='Championship')); clearResults(); unlock('sec-time'); checkFetch(); }
 function setRegion(region){
   S.regionFilter=region;
-  ['all','north','central','south'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r===region));
+  ['all','north-of-466','between-the-6s','south-of-466a','south-of-turnpike'].forEach(r=>{document.getElementById('r-'+r).classList.toggle('on',r===region);document.getElementById('r-'+r).setAttribute('aria-pressed',String(r===region));});
   clearResults();
 }
-function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>x.classList.remove('on')); el.classList.add('on'); clearResults(); unlock('sec-fetch'); checkFetch(); }
+function setTime(f,el){ S.timeFilter=f; document.querySelectorAll('.t-tile').forEach(x=>{x.classList.remove('on');x.setAttribute('aria-pressed','false');}); el.classList.add('on');el.setAttribute('aria-pressed','true'); clearResults(); unlock('sec-fetch'); checkFetch(); }
 function unlock(id){ document.getElementById(id).classList.remove('dim'); }
 function checkFetch(){ const ok=S.date&&S.golfers.length>0&&S.course&&S.timeFilter; document.getElementById('fetchBtn').disabled=!ok; if(ok) unlock('sec-fetch'); }
 
@@ -1286,7 +1378,7 @@ function resetApp(){
   document.querySelectorAll('.d-card,.g-card,.t-tile').forEach(x=>x.classList.remove('on'));
   document.getElementById('t-exec').classList.remove('on');
   document.getElementById('t-champ').classList.remove('on');
-  ['all','north','central','south'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r==='all'));
+  ['all','north-of-466','between-the-6s','south-of-466a','south-of-turnpike'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r==='all'));
   document.getElementById('guestTog').checked=false;
   ['sec-golfers','sec-course','sec-time','sec-fetch'].forEach(id=>document.getElementById(id).classList.add('dim'));
   document.getElementById('results-sec').style.display='none';
@@ -1336,11 +1428,11 @@ function buildRequestGolferList(){
   }
   list.innerHTML=BUDDIES.map(b=>{
     const sel=SR.golfers.includes(b.id);
-    return `<div class="g-card${sel?' on':''}" onclick="toggleRequestGolfer('${esc(b.id)}')">
+    return `<button type="button" class="g-card${sel?' on':''}" onclick="toggleRequestGolfer('${esc(b.id)}')">
       <div class="g-avatar">${esc(b.initials||'?')}</div>
       <div class="g-info"><div class="g-name">${esc(b.name||'Golfer')}</div><div class="g-id">ID ${esc(b.id)}</div></div>
       <div class="g-check">${sel?'✓':''}</div>
-    </div>`;
+    </button>`;
   }).join('');
 }
 function toggleRequestGolfer(id){
@@ -1548,5 +1640,7 @@ async function deleteRequest(rid){
   }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
 }
 </script>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/js/experience.js"></script>
 </body>
 </html>

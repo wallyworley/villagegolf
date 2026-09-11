@@ -179,6 +179,24 @@ def set_user(username, data):
         )
 
 
+def update_user(username, updater):
+    """Atomically update an existing profile, preserving concurrent edits.
+
+    The callback receives the latest decrypted profile while the SQLite write
+    lock is held. A removed/unreadable profile is never recreated by an edit.
+    """
+    _ensure_schema()
+    with closing(_connect()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT data FROM users WHERE username = ?", (username,)).fetchone()
+        profile = _decode(row[0]) if row else None
+        if not isinstance(profile, dict):
+            return None
+        updater(profile)
+        conn.execute("UPDATE users SET data = ? WHERE username = ?", (_encode(profile), username))
+        return profile
+
+
 def delete_user(username):
     """Delete the profile for `username` (no-op if absent)."""
     if not username:

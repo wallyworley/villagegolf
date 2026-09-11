@@ -1,11 +1,18 @@
 import os
 import time
+import argparse
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-load_dotenv("/Users/walterworley/Documents/villages-golf-app/.env")
 from golf_service import GolfService
 
-def test():
+def main():
+    parser = argparse.ArgumentParser(description="Opt-in live diagnostic; never part of the automated tests.")
+    parser.add_argument("--live", action="store_true", required=True)
+    parser.parse_args()
+    load_dotenv()
+    play_date = datetime.now(ZoneInfo("America/New_York")).date() + timedelta(days=1)
     service = GolfService()
     print("Fetching buddies...")
     start = time.time()
@@ -22,10 +29,11 @@ def test():
         tvn_username=os.environ["TVN_USERNAME"],
         tvn_password=os.environ["TVN_PASSWORD"],
         golf_password=os.environ["GOLF_PASSWORD"],
-        date_str="20260314",
-        date_label="Sat, Mar 14, 2026",
+        date_str=play_date.strftime("%Y%m%d"),
+        date_label=play_date.isoformat(),
         course_type="Executive",
-        golfer_ids=["483204"],
+        region_filter="all",
+        golfer_ids=[buddies["primary"]["id"]],
         num_golfers=1,
         has_guests=False,
         time_filter="all"
@@ -34,4 +42,4 @@ def test():
 
 if __name__ == "__main__":
     os.environ["HEADLESS"] = "true"
-    test()
+    main()

@@ -21,3 +21,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Salesforce CLI cache (not part of this app)
+.sf/

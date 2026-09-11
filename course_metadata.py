@@ -1,6 +1,13 @@
 """
 Course metadata for The Villages golf courses.
+
+lookup_course_metadata matches a scraped label against every canonical name
+and alias as a whole word or phrase, and keeps the longest matching
+candidate text (ties favor the canonical name over an alias, then the first
+entry in dict order).
 """
+
+import re
 
 COURSE_METADATA = {
     "Belle Glade": {
@@ -440,17 +447,83 @@ COURSE_METADATA = {
 }
 
 
+BANDS = (
+    ("north-of-466", "North of 466"),
+    ("between-the-6s", "Between the 6s"),
+    ("south-of-466a", "South of 466A"),
+    ("south-of-turnpike", "South of the Turnpike"),
+)
+BAND_KEYS = frozenset(key for key, _ in BANDS)
+_BAND_KEY_BY_LABEL = {label.lower(): key for key, label in BANDS}
+
+
+def band_key(label):
+    """Return the filter key for a band label, or None when the label is unknown."""
+    return _BAND_KEY_BY_LABEL.get(str(label or "").strip().lower())
+
+
+_LOOKUP_CANDIDATES = None
+
+
+def _lookup_candidates():
+    """Compile the whole-word patterns for every canonical name and alias once.
+
+    ``COURSE_METADATA`` is only mutated by the catalog merge at import time,
+    which runs before the first lookup, so building the list lazily on first
+    use sees the merged catalog.
+    """
+    global _LOOKUP_CANDIDATES
+    if _LOOKUP_CANDIDATES is None:
+        candidates = []
+        for canonical_name, meta in COURSE_METADATA.items():
+            texts = [(canonical_name, True)] + [(alias, False) for alias in meta.get("aliases", [])]
+            for candidate_text, is_canonical in texts:
+                pattern = re.compile(r"\b" + re.escape(candidate_text.lower()) + r"\b")
+                candidates.append((pattern, (len(candidate_text), is_canonical), canonical_name, meta))
+        _LOOKUP_CANDIDATES = candidates
+    return _LOOKUP_CANDIDATES
+
+
 def lookup_course_metadata(course_label):
-    """Match a scraped course label to structured metadata."""
+    """Match a scraped course label to structured metadata.
+
+    Matches every canonical name and alias as a whole word or phrase in the
+    label and keeps the longest matching candidate: ties favor the canonical
+    name over an alias, then the first entry in dict order.
+    """
     label = (course_label or "").strip()
     if not label:
         return None, {}
 
     lower_label = label.lower()
-    for canonical_name, meta in COURSE_METADATA.items():
-        if canonical_name.lower() in lower_label:
-            return canonical_name, meta
-        for alias in meta.get("aliases", []):
-            if alias.lower() in lower_label:
-                return canonical_name, meta
-    return None, {}
+    best = None  # (sort_key, canonical_name, meta)
+    for pattern, sort_key, canonical_name, meta in _lookup_candidates():
+        if not pattern.search(lower_label):
+            continue
+        if best is None or sort_key > best[0]:
+            best = (sort_key, canonical_name, meta)
+    if best is None:
+        return None, {}
+    return best[1], best[2]
+
+
+# The scraper historically consumed ``COURSE_METADATA`` keyed by display name.
+# Keep that API while sourcing the richer map catalog from one checked-in file.
+# A source-free fallback remains above so importing the scraper still works if
+# a packaged deployment accidentally omits the optional catalog file. The
+# curated fallback carries no `band` entries: when the catalog file below is
+# missing, lookup_course_metadata returns no band value for any course, so
+# every band filter excludes those courses instead of guessing (fail closed).
+try:
+    import json
+    from pathlib import Path
+
+    _catalog_path = Path(__file__).resolve().parent / "data" / "course_locations.json"
+    _catalog = json.loads(_catalog_path.read_text(encoding="utf-8"))
+    for _course in _catalog:
+        _meta = dict(_course)
+        _meta["aliases"] = list(_course.get("aliases") or [])
+        COURSE_METADATA[_course["name"]] = _meta
+except (OSError, ValueError, TypeError, KeyError):
+    # The literal metadata above is the compatibility fallback.
+    pass

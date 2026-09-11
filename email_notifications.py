@@ -8,6 +8,7 @@ import os
 import ssl
 import urllib.error
 import urllib.request
+from html import escape
 
 import certifi
 
@@ -65,7 +66,7 @@ def send_email(recipient_email, subject, text_body, html_body=None):
         ],
         "subject": subject,
         "text": text_body,
-        "html": html_body or f"<pre>{text_body}</pre>",
+        "html": html_body or f"<pre>{escape(text_body)}</pre>",
     }
 
     req = urllib.request.Request(
@@ -130,13 +131,14 @@ def send_request_result(recipient_email, result, play_date_label,
     date = play_date_label or "your requested date"
     course_list = ", ".join(courses) if courses else ""
 
-    if result == "assigned" and reservation:
+    if result in ("assigned", "matched") and reservation:
         res_no = reservation.get("reservation_no", "")
         course = reservation.get("course", "") or course_list
         tee = reservation.get("display_time") or reservation.get("time") or ""
-        subject = f"Tee Time Assigned: {date}"
+        subject = f"Matching Tee Time Found: {date}"
         text = (
-            "Good news! Your tee-time request was assigned.\n\n"
+            "We found a reservation matching your request details.\n"
+            "This confirms a reservation is listed, not how it was assigned.\n\n"
             f"Date: {date}\n"
             f"Time: {tee}\n"
             f"Course: {course}\n"
@@ -144,9 +146,10 @@ def send_request_result(recipient_email, result, play_date_label,
             "See 'My Tee Times' in the app for details."
         )
         html = (
-            "<p><strong>Good news! Your tee-time request was assigned.</strong></p>"
-            f"<p>Date: {date}<br>Time: {tee}<br>Course: {course}<br>"
-            f"Reservation #{res_no}</p>"
+            "<p><strong>We found a reservation matching your request details.</strong></p>"
+            "<p>This confirms a reservation is listed, not how it was assigned.</p>"
+            f"<p>Date: {escape(str(date))}<br>Time: {escape(str(tee))}<br>Course: {escape(str(course))}<br>"
+            f"Reservation #{escape(str(res_no))}</p>"
             "<p>See “My Tee Times” in the app for details.</p>"
         )
     elif result == "not_assigned":
@@ -158,9 +161,9 @@ def send_request_result(recipient_email, result, play_date_label,
             "either in the app (Book Tee Time) or by calling the golf shop."
         )
         html = (
-            f"<p>Your tee-time request for <strong>{date}</strong> was not "
+            f"<p>Your tee-time request for <strong>{escape(str(date))}</strong> was not "
             "assigned this time.</p>"
-            + (f"<p>Courses requested: {course_list}</p>" if course_list else "")
+            + (f"<p>Courses requested: {escape(course_list)}</p>" if course_list else "")
             + "<p>You can still reserve an open tee time 1 to 3 days before play, "
             "either in the app (Book Tee Time) or by calling the golf shop.</p>"
         )
@@ -173,7 +176,7 @@ def send_request_result(recipient_email, result, play_date_label,
         )
         html = (
             f"<p>We were unable to check whether your request for "
-            f"<strong>{date}</strong> was assigned. Please check "
+            f"<strong>{escape(str(date))}</strong> was assigned. Please check "
             "“My Tee Times” in the app or call the golf shop to confirm.</p>"
         )
     return send_email(recipient_email, subject, text, html)
@@ -194,10 +197,10 @@ def send_booking_confirmation(recipient_email, reservation_no, course, display_t
     )
     html = (
         "<p><strong>Tee Time Confirmed!</strong></p>"
-        f"<p>Reservation #{reservation_no}<br>"
-        f"Date: {date_label}<br>"
-        f"Time: {display_time}<br>"
-        f"Course: {course}<br>"
-        f"Golfers: {golfers_str}</p>"
+        f"<p>Reservation #{escape(str(reservation_no))}<br>"
+        f"Date: {escape(str(date_label))}<br>"
+        f"Time: {escape(str(display_time))}<br>"
+        f"Course: {escape(str(course))}<br>"
+        f"Golfers: {escape(golfers_str)}</p>"
     )
     return send_email(recipient_email, subject, text, html)

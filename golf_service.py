@@ -8,8 +8,11 @@ import os
 import re
 import time as _time
 import logging
+import uuid
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
-from course_metadata import lookup_course_metadata
+from course_metadata import band_key, lookup_course_metadata
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,75 @@ def _clean_golfer_name(raw_name, golfer_id=None):
 
 def _normalize_space(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _normalize_play_date(value, today=None):
+    """Return a Villages play date as YYYY-MM-DD, or None when unparseable.
+
+    Open reservations omit the year (for example ``Thursday: 9/10``). Those
+    reservations are future-facing, so infer the closest date on or after the
+    current Eastern date. The weekday, when present, must agree with the
+    inferred date.
+    """
+    raw = _normalize_space(value)
+    if not raw:
+        return None
+    current = today or datetime.now(ZoneInfo("America/New_York")).date()
+    raw_without_weekday = re.sub(
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*:\s*",
+        "", raw, flags=re.IGNORECASE,
+    )
+
+    for pattern, order in (
+        (r"^(\d{4})-(\d{1,2})-(\d{1,2})$", "ymd"),
+        (r"^(\d{4})(\d{2})(\d{2})$", "ymd"),
+        (r"^(\d{1,2})/(\d{1,2})/(\d{4})$", "mdy"),
+    ):
+        match = re.fullmatch(pattern, raw_without_weekday)
+        if not match:
+            continue
+        parts = [int(part) for part in match.groups()]
+        year, month, day = parts if order == "ymd" else (parts[2], parts[0], parts[1])
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return None
+
+    match = re.search(
+        r"^(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*:\s*)?"
+        r"(\d{1,2})/(\d{1,2})$",
+        raw,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    weekday, month_text, day_text = match.groups()
+    candidates = []
+    for year in (current.year - 1, current.year, current.year + 1, current.year + 2):
+        try:
+            candidate = date(year, int(month_text), int(day_text))
+        except ValueError:
+            continue
+        if weekday and candidate.strftime("%A").lower() != weekday.lower():
+            continue
+        if (candidate - current).days >= -1:
+            candidates.append(candidate)
+    return min(candidates).isoformat() if candidates else None
+
+
+def _course_key(value):
+    """Normalize a course label for exact equality across the two CGI pages."""
+    label = _normalize_course_label(value)
+    label = re.sub(r"\b(?:starting\s+)?hole\s*\d+\b", "", label, flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+
+
+def _reservation_identity(reservation):
+    return str((reservation or {}).get("reservation_no") or "").strip()
+
+
+def _unknown_result(message):
+    return {"success": False, "unknown": True, "error": message}
 
 
 def _timeout_error():
@@ -451,12 +523,12 @@ class GolfService:
         # to the main menu is to re-run the PIN login sequence from the TVN homepage.
         self._login(page, tvn_username, tvn_password, golf_password)
 
-    def _nav_to_glf109c(self, page, num_golfers, has_guests, course_type):
-        """Navigate from glf100 through glf109b to glf109c."""
-        # glf109a
-        page.locator("a", has_text="Reservations-View Open Tee Times").click()
-        page.wait_for_url("**/glf109a**", timeout=10000)
-
+    def _nav_to_glf109c(self, page, num_golfers, has_guests, course_type,
+                        from_reservations_page=False):
+        """Navigate from glf100 (or an existing glf109a) to glf109c."""
+        if not from_reservations_page:
+            page.locator("a", has_text="Reservations-View Open Tee Times").click()
+            page.wait_for_url("**/glf109a**", timeout=10000)
         # glf109b
         page.get_by_role("link", name="Create New Reservation", exact=True).click()
         page.wait_for_url("**/glf109b**", timeout=10000)
@@ -473,19 +545,36 @@ class GolfService:
         page.wait_for_url("**/glf109a**", timeout=10000)
 
     def _extract_reservations(self, page):
-        """Scrape outstanding reservations from glf109a."""
-        raw_rows = page.evaluate("""() => {
+        """Scrape a recognized glf109a page, preserving field line breaks.
+
+        Raises when the page is not a valid reservations list. An empty list
+        therefore means a verified empty list rather than a scraper failure.
+        """
+        payload = page.evaluate("""() => {
             const rows = Array.from(document.querySelectorAll("table tr"));
-            return rows.map(row => {
+            const parsedRows = rows.map(row => {
                 const cells = Array.from(row.querySelectorAll("td")).map(cell =>
-                    (cell.innerText || "").replace(/\\s+/g, " ").trim()
+                    (cell.innerText || "").split(/\\r?\\n/)
+                        .map(line => line.replace(/[ \\t]+/g, " ").trim())
+                        .filter(Boolean).join("\\n")
                 );
                 const links = Array.from(row.querySelectorAll("a")).map(link =>
                     (link.innerText || "").replace(/\\s+/g, " ").trim()
                 ).filter(Boolean);
-                return {cells, links};
+                const golferIds = Array.from(row.querySelectorAll(
+                    'input[name*="golf" i], input[name*="player" i], select[name*="buddy" i]'
+                )).map(el => (el.value || '').trim()).filter(v => /^\\d+$/.test(v));
+                return {cells, links, golferIds};
             }).filter(row => row.cells.some(Boolean));
+            const body = (document.body && document.body.innerText || '');
+            const valid = /glf109a/i.test(location.pathname + location.search) &&
+                /(open reservations|create new reservation|no (?:open |outstanding )?reservations)/i.test(body);
+            return {valid, rows: parsedRows};
         }""")
+
+        if not isinstance(payload, dict) or not payload.get("valid"):
+            raise RuntimeError("The reservations page layout was not recognized.")
+        raw_rows = payload.get("rows") or []
 
         reservations = []
         for row in raw_rows:
@@ -514,6 +603,7 @@ class GolfService:
 
             description_lines = [line.strip() for line in str(cells[2] or "").splitlines() if line.strip()]
             description = _normalize_space(" ".join(description_lines)) or description_text
+            description_source = "\n".join(description_lines)
 
             date = None
             time = None
@@ -521,19 +611,36 @@ class GolfService:
             course = None
             phone = None
 
-            for line in description_lines:
-                date_match = re.search(r"([A-Za-z]+):\s*(\d{1,2}/\d{1,2})\s+at\s+(\d{1,2}:\d{2}\s*[AP]M)", line, re.IGNORECASE)
-                if date_match:
-                    date = f"{date_match.group(1)}: {date_match.group(2)}"
-                    display_time = _normalize_space(date_match.group(3).upper())
-                    continue
-                course_match = re.search(r"Course:\s*(.+)", line, re.IGNORECASE)
-                if course_match:
-                    course = _normalize_space(course_match.group(1))
-                    continue
-                phone_match = re.search(r"Phone:\s*(.+)", line, re.IGNORECASE)
-                if phone_match:
-                    phone = _normalize_space(phone_match.group(1))
+            date_match = re.search(
+                r"\b([A-Za-z]+)\s*:\s*(\d{1,2}/\d{1,2}(?:/\d{4})?)\s+at\s+"
+                r"(\d{1,2}:\d{2}\s*[AP]M)\b",
+                description_source,
+                re.IGNORECASE,
+            )
+            if date_match:
+                date = f"{date_match.group(1).title()}: {date_match.group(2)}"
+                display_time = _normalize_space(date_match.group(3).upper())
+
+            course_match = re.search(r"^\s*Course\s*:\s*(.+?)\s*$", description_source,
+                                     re.IGNORECASE | re.MULTILINE)
+            if not course_match:
+                course_match = re.search(
+                    r"\bCourse\s*:\s*(.+?)(?=\s+(?:Phone|Golfer(?:s)?|Player(?:s)?)\s*:|$)",
+                    description,
+                    re.IGNORECASE,
+                )
+            if course_match:
+                course = _normalize_space(course_match.group(1))
+            phone_match = re.search(r"^\s*Phone\s*:\s*(.+?)\s*$", description_source,
+                                    re.IGNORECASE | re.MULTILINE)
+            if not phone_match:
+                phone_match = re.search(
+                    r"\bPhone\s*:\s*(.+?)(?=\s+(?:Course|Golfer(?:s)?|Player(?:s)?)\s*:|$)",
+                    description,
+                    re.IGNORECASE,
+                )
+            if phone_match:
+                phone = _normalize_space(phone_match.group(1))
 
             if display_time:
                 time = display_time
@@ -542,27 +649,50 @@ class GolfService:
 
             actions = row.get("links") or []
 
-            reservations.append({
+            observed_golfer_ids = []
+            for value in row.get("golferIds") or []:
+                gid = str(value).strip()
+                if gid.isdigit() and gid not in observed_golfer_ids:
+                    observed_golfer_ids.append(gid)
+            for match in re.finditer(
+                r"\b(?:Golfer(?:s)?|Player(?:s)?|Member(?:s)?)\s*:\s*([^\n]+)",
+                str(cells[2] or ""),
+                re.IGNORECASE,
+            ):
+                for gid in re.findall(r"(?<!\d)(\d{4,8})(?!\d)", match.group(1)):
+                    if gid not in observed_golfer_ids:
+                        observed_golfer_ids.append(gid)
+
+            item = {
                 "reservation_no": reservation_no,
                 "date": date,
+                "play_date": _normalize_play_date(date),
                 "time": time,
                 "display_time": display_time or "",
                 "course": course,
                 "phone": phone,
                 "actions": actions,
                 "summary": description,
-            })
+            }
+            if observed_golfer_ids:
+                item["golfer_ids"] = observed_golfer_ids
+            reservations.append(item)
 
         return reservations
 
     def _find_booked_reservation(self, page, tvn_username, tvn_password,
-                                 golf_password, time_str, expected_date=None):
+                                 golf_password, time_str, expected_date,
+                                 expected_course, preexisting_ids):
         """After an ambiguous booking submit, check glf109a for a matching
-        reservation. Returns the reservation dict if one is found, else None.
+        reservation. Returns the reservation dict only when exactly one new
+        reservation matches time, date, and course; otherwise None.
 
         Used to distinguish "the confirmation page was just slow / worded
         differently" (booking DID commit) from "the booking never happened",
         so we never report a plain failure that invites a duplicate booking.
+        Two or more matches are just as unconfirmed as zero: picking one at
+        random would be as likely to report the wrong reservation as the
+        right one, so an ambiguous result is logged and treated as unknown.
         Best-effort: any navigation error yields None (treated as unconfirmed).
         """
         try:
@@ -573,20 +703,96 @@ class GolfService:
             logger.exception("book reconciliation failed for user=%s", tvn_username)
             return None
 
-        want_time = (_display_time(time_str) or "").upper()
-        want_date = (str(expected_date).strip().lower() if expected_date else "")
+        if preexisting_ids is None:
+            return None
+        want_time = _normalize_space(_display_time(time_str)).upper()
+        want_date = _normalize_play_date(expected_date)
+        want_course = _course_key(expected_course)
+        if not want_time or not want_date or not want_course:
+            return None
+        matches = []
         for r in reservations:
-            rtime = (r.get("display_time") or "").upper()
-            if not rtime or rtime != want_time:
+            rid = _reservation_identity(r)
+            if not rid or rid in preexisting_ids:
                 continue
-            if want_date and want_date not in (r.get("date") or "").lower():
+            if _normalize_space(r.get("display_time")).upper() != want_time:
                 continue
-            return r
+            if r.get("play_date") != want_date:
+                continue
+            if _course_key(r.get("course")) != want_course:
+                continue
+            matches.append(r)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            logger.warning(
+                "book reconciliation ambiguous user=%s matches=%d",
+                tvn_username, len(matches),
+            )
         return None
 
+    def _reconcile_reservation_absent(self, page, tvn_username, tvn_password,
+                                      golf_password, reservation_no):
+        """Return (absent, reservations) from a verified glf109a, or (None, None)."""
+        try:
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_glf109a(page)
+            reservations = self._extract_reservations(page)
+        except Exception:
+            logger.exception(
+                "reservation delete reconciliation failed user=%s reservation=%s",
+                tvn_username, reservation_no,
+            )
+            return None, None
+        target = str(reservation_no).strip()
+        exists = any(_reservation_identity(item) == target for item in reservations)
+        return not exists, reservations
+
+    def _booking_success(self, reservation_no, course_name, time_str, ctx):
+        """Build booking output exclusively from the stored search context."""
+        return {
+            "success": True,
+            "reservation_no": str(reservation_no),
+            "course": course_name,
+            "time": time_str,
+            "display_time": _display_time(time_str),
+            "play_date": ctx.get("play_date"),
+            "date": ctx.get("date_str"),
+            "date_label": ctx.get("date_label"),
+            "golfer_ids": list(ctx.get("golfer_ids") or []),
+            "num_golfers": ctx.get("num_golfers"),
+            "has_guests": ctx.get("has_guests"),
+            "course_type": ctx.get("course_type"),
+            "search_id": ctx.get("search_id"),
+            "message": (
+                f"Booked! Reservation #{reservation_no}: {course_name} "
+                f"at {_display_time(time_str)}"
+            ),
+        }
+
+    def _reconcile_booking_outcome(self, page, tvn_username, tvn_password,
+                                   golf_password, ctx, course_name, time_str):
+        found = self._find_booked_reservation(
+            page, tvn_username, tvn_password, golf_password,
+            time_str, ctx.get("date_str"), course_name,
+            ctx.get("preexisting_reservation_ids"),
+        )
+        if found and found.get("reservation_no"):
+            return self._booking_success(
+                found["reservation_no"], course_name, time_str, ctx
+            )
+        self._close_active()
+        return _unknown_result(
+            "We could not confirm your booking. Open My Tee Times to check "
+            "whether it went through before trying again."
+        )
+
     def _setup_reservation(self, page, num_golfers, has_guests, course_type,
-                           golfer_ids, date_str):
-        self._nav_to_glf109c(page, num_golfers, has_guests, course_type)
+                           golfer_ids, date_str, from_reservations_page=False):
+        self._nav_to_glf109c(
+            page, num_golfers, has_guests, course_type,
+            from_reservations_page=from_reservations_page,
+        )
 
         # glf109c — first select = date, second = sort order, remaining = golfer slots
         selects = page.locator("select").all()
@@ -635,13 +841,13 @@ class GolfService:
             course_label = _normalize_course_label(t["course"])
             canonical_name, metadata = lookup_course_metadata(course_label)
             if region_filter and region_filter != "all":
-                region = (metadata.get("region") or "").strip().lower()
-                if region != region_filter:
+                if band_key(metadata.get("band")) != region_filter:
                     continue
             times.append({
                 "course":       course_label,
                 "course_name":  canonical_name or course_label,
                 "region":       metadata.get("region"),
+                "band":         metadata.get("band"),
                 "course_type":  metadata.get("course_type"),
                 "address":      metadata.get("address"),
                 "zip":          metadata.get("zip"),
@@ -707,25 +913,78 @@ class GolfService:
             self._close_active()
             return {"success": False, "error": "Could not connect to the golf system. Please try again."}
 
+    def _capture_before_state(self, page, tvn_username):
+        """Capture the set of reservation identities that exist before a
+        search, so booking reconciliation can later tell a new reservation
+        from a preexisting one. Retries once (re-navigating to glf109a
+        before the second attempt) before giving up; a failed first attempt
+        is logged at WARNING and retried, a failed second attempt is logged
+        at ERROR (via logger.exception, unchanged severity) and returns
+        None, which forces every later ambiguous booking in that search to
+        report unknown rather than guess.
+        """
+        for attempt in (1, 2):
+            try:
+                before = self._extract_reservations(page)
+            except Exception as exc:
+                if attempt == 1:
+                    logger.warning(
+                        "before-state capture failed user=%s attempt=1 error=%s",
+                        tvn_username, exc.__class__.__name__,
+                    )
+                    try:
+                        self._nav_to_glf109a(page)
+                    except Exception:
+                        logger.exception(
+                            "could not return to reservations page for before-state retry user=%s",
+                            tvn_username,
+                        )
+                        return None
+                    continue
+                logger.exception(
+                    "could not capture reservation before-state user=%s", tvn_username
+                )
+                return None
+            return {_reservation_identity(r) for r in before}
+
     def get_available_times(self, tvn_username, tvn_password, golf_password,
                             date_str, date_label, course_type, region_filter,
                             golfer_ids, num_golfers, has_guests, time_filter=None):
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
-            self._setup_reservation(page, num_golfers, has_guests, course_type, golfer_ids, date_str)
+            # Capture a verified before-state while glf109a is already in the
+            # normal search path. Reconciliation may only accept a reservation
+            # identity that did not exist before this search.
+            self._nav_to_glf109a(page)
+            preexisting_ids = self._capture_before_state(page, tvn_username)
+            self._setup_reservation(
+                page, num_golfers, has_guests, course_type, golfer_ids, date_str,
+                from_reservations_page=True,
+            )
             times = self._extract_times(page, time_filter, region_filter)
+            search_id = str(uuid.uuid4())
             self._active.search_context = {
                 "user": tvn_username,
                 "date_str": str(date_str or "").strip(),
+                "play_date": _normalize_play_date(date_str),
+                "date_label": str(date_label or "").strip(),
                 "course_type": str(course_type or "").strip(),
                 "region_filter": str(region_filter or "all").strip().lower(),
                 "golfer_ids": [str(g).strip() for g in (golfer_ids or []) if str(g).strip()],
                 "num_golfers": int(num_golfers),
                 "has_guests": bool(has_guests),
+                "search_id": search_id,
+                "offered_times": [(t.get("course"), t.get("time")) for t in times],
+                "preexisting_reservation_ids": preexisting_ids,
             }
             self._active.ts = _time.time()  # refresh TTL
-            return {"success": True, "times": times, "date_label": date_label}
+            return {
+                "success": True,
+                "times": times,
+                "date_label": date_label,
+                "search_id": search_id,
+            }
         except PWTimeout:
             self._close_active()
             return {"success": False, "error": _timeout_error()}
@@ -745,7 +1004,7 @@ class GolfService:
             self._nav_to_glf109a(page)
             reservations = self._extract_reservations(page)
             self._active.ts = _time.time()
-            return {"success": True, "reservations": reservations}
+            return {"success": True, "verified": True, "reservations": reservations}
         except PWTimeout:
             self._close_active()
             return {"success": False, "error": _timeout_error()}
@@ -758,8 +1017,13 @@ class GolfService:
             return {"success": False, "error": "Could not load your tee times right now. Please try again."}
 
     def delete_reservation(self, tvn_username, tvn_password, golf_password, reservation_no):
-        """Click 'DELETE ALL PLAYERS ON THIS RESERVATION' for a reservation."""
+        """Delete one exact reservation and verify its absence on glf109a."""
+        submission_attempted = False
+        page = None
+        target = str(reservation_no or "").strip()
         try:
+            if not target.isdigit():
+                return {"success": False, "error": "A valid reservation number is required."}
             _, page = self._get_or_create_session(tvn_username)
             current_url = (page.url or "").lower()
             if "glf109a" not in current_url:
@@ -768,35 +1032,35 @@ class GolfService:
                     "error": "Reservations page is no longer active. Please tap View My Tee Times again before deleting.",
                 }
 
-            target_index = page.evaluate("""reservationNo => {
-                const rows = Array.from(document.querySelectorAll('table tr'));
-                for (let i = 0; i < rows.length; i++) {
-                    const cells = rows[i].querySelectorAll('td');
-                    if (cells.length < 3) continue;
-                    const reservationText = (cells[1].innerText || '').replace(/\\s+/g, ' ').trim();
-                    if (reservationText.includes(String(reservationNo))) return i;
-                }
-                return -1;
-            }""", str(reservation_no))
-
-            if target_index < 0:
+            # Parsing the page first proves this is a recognized reservations
+            # list and that the exact reservation identity exists.
+            current = self._extract_reservations(page)
+            if not any(_reservation_identity(item) == target for item in current):
                 return {"success": False, "error": "Reservation not found."}
 
-            clicked = page.evaluate("""rowIndex => {
+            found = page.evaluate("""reservationNo => {
                 const rows = Array.from(document.querySelectorAll('table tr'));
-                const row = rows[rowIndex];
-                if (!row) return false;
-                const links = Array.from(row.querySelectorAll('a'));
-                const target = links.find(link =>
-                    /delete\\s+all\\s+players\\s+on\\s+this\\s+reservation/i.test((link.innerText || '').trim())
-                );
-                if (!target) return false;
-                target.click();
-                return true;
-            }""", int(target_index))
-
-            if not clicked:
+                const token = new RegExp('Reservation\\s*No\\.?\\s*' + reservationNo + '(?!\\d)', 'i');
+                for (const row of rows) {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length < 3) continue;
+                    if (!token.test(cells[1].innerText || '')) continue;
+                    const link = Array.from(row.querySelectorAll('a')).find(a =>
+                        /^delete\\s+all\\s+players\\s+on\\s+this\\s+reservation$/i.test(
+                            (a.innerText || '').replace(/\\s+/g, ' ').trim()
+                        )
+                    );
+                    if (link) {
+                        link.setAttribute('data-delete-reservation', reservationNo);
+                        return true;
+                    }
+                }
+                return false;
+            }""", target)
+            if not found:
                 return {"success": False, "error": "Delete action is not available for this reservation."}
+
+            page.locator(f'a[data-delete-reservation="{target}"]').first.click(timeout=8000)
 
             try:
                 page.wait_for_load_state("networkidle", timeout=10000)
@@ -807,24 +1071,15 @@ class GolfService:
             # same live session/page and wait specifically for that page before
             # doing anything else. Do not re-login/re-navigate until after the
             # final delete click has been attempted.
-            confirm_ready = False
-            try:
-                page.locator(f"text=Delete Reservation No. {reservation_no}").first.wait_for(timeout=8000)
-                confirm_ready = True
-            except Exception:
-                pass
-            if not confirm_ready:
-                try:
-                    page.locator("text=DO NOT DELETE THIS RESERVATION").first.wait_for(timeout=3000)
-                    confirm_ready = True
-                except Exception:
-                    pass
-
-            if not confirm_ready:
+            body_text = _normalize_space(page.inner_text("body"))
+            confirm_match = re.search(
+                r"Delete\s+Reservation\s+No\.?\s*(\d+)", body_text, re.IGNORECASE
+            )
+            if not confirm_match or confirm_match.group(1) != target:
                 body_text = _normalize_space(page.inner_text("body"))
                 return {
                     "success": False,
-                    "error": "Delete confirmation page did not appear after the first delete click.",
+                    "error": "The delete confirmation did not identify the requested reservation.",
                     "debug_page": body_text[:500],
                 }
 
@@ -843,56 +1098,60 @@ class GolfService:
             confirm_target = confirm_link.last
             confirm_target.scroll_into_view_if_needed(timeout=5000)
             confirm_target.wait_for(state="visible", timeout=5000)
-
-            clicked_confirm = page.evaluate("""() => {
-                const links = Array.from(document.querySelectorAll('a'));
-                const target = links.find(link =>
-                    (link.innerText || '').replace(/\\s+/g, ' ').trim() === 'DELETE ALL PLAYERS ON THIS RESERVATION'
-                );
-                if (!target) return false;
-                target.scrollIntoView({block: 'center'});
-                target.click();
-                return true;
-            }""")
-            if not clicked_confirm:
-                confirm_target.click(timeout=5000, force=True)
+            submission_attempted = True
+            confirm_target.click(timeout=5000, force=True)
 
             try:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 page.wait_for_load_state("domcontentloaded", timeout=5000)
 
-            current_url = (page.url or "").lower()
-            if "glf109a" not in current_url:
-                menu_button = page.locator("input[name='Menu'], input[value='Go to Menu'], input[value='Menu']")
-                if menu_button.count() > 0:
-                    menu_button.first.click(timeout=5000)
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=10000)
-                    except Exception:
-                        page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    current_url = (page.url or "").lower()
-                if "glf109a" not in current_url:
-                    return {
-                        "success": True,
-                        "reservation_no": str(reservation_no),
-                        "reservations": None,
-                        "needs_refresh": True,
-                        "message": "Reservation delete completed. Refreshing reservations is recommended.",
-                        "debug_page": _normalize_space(page.inner_text("body"))[:500],
-                    }
-
-            remaining = self._extract_reservations(page)
-            still_exists = any(str(item.get("reservation_no") or "") == str(reservation_no) for item in remaining)
-            if still_exists:
+            absent, remaining = self._reconcile_reservation_absent(
+                page, tvn_username, tvn_password, golf_password, target
+            )
+            if absent is False:
                 return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
+            if absent is None:
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the reservation was deleted. "
+                    "Open My Tee Times and verify before trying again."
+                )
 
             self._active.ts = _time.time()
-            return {"success": True, "reservation_no": str(reservation_no), "reservations": remaining}
+            return {"success": True, "reservation_no": target, "reservations": remaining, "verified": True}
         except PWTimeout:
+            if submission_attempted and page is not None:
+                absent, remaining = self._reconcile_reservation_absent(
+                    page, tvn_username, tvn_password, golf_password, target
+                )
+                if absent is True:
+                    return {"success": True, "reservation_no": target, "reservations": remaining, "verified": True}
+                if absent is False:
+                    return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the reservation was deleted. "
+                    "Open My Tee Times and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
+            if submission_attempted and page is not None:
+                absent, remaining = self._reconcile_reservation_absent(
+                    page, tvn_username, tvn_password, golf_password, target
+                )
+                if absent is True:
+                    return {"success": True, "reservation_no": target,
+                            "reservations": remaining, "verified": True}
+                if absent is False:
+                    return {"success": False,
+                            "error": "Reservation still appears on the site after delete attempt."}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the reservation was deleted. "
+                    "Open My Tee Times and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
@@ -901,11 +1160,29 @@ class GolfService:
                 tvn_username,
                 reservation_no,
             )
+            if submission_attempted and page is not None:
+                absent, remaining = self._reconcile_reservation_absent(
+                    page, tvn_username, tvn_password, golf_password, target
+                )
+                if absent is True:
+                    return {"success": True, "reservation_no": target, "reservations": remaining, "verified": True}
+                if absent is False:
+                    return {"success": False, "error": "Reservation still appears on the site after delete attempt."}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the reservation was deleted. "
+                    "Open My Tee Times and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": "Could not delete that reservation right now. Please try again."}
 
     def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str,
-                      expected_date=None, expected_golfer_ids=None, expected_num_golfers=None):
+                      expected_date=None, expected_golfer_ids=None,
+                      expected_num_golfers=None, expected_course_type=None,
+                      expected_has_guests=None, search_id=None):
+        submission_attempted = False
+        page = None
+        ctx = {}
         try:
             # Booking must reuse the exact session built by get_available_times().
             # Look it up by user so another golfer's request can't clobber it.
@@ -923,13 +1200,16 @@ class GolfService:
                 return {"success": False, "error": "Search context changed. Please fetch tee times again."}
             if "glf109e" not in (page.url or "").lower():
                 return {"success": False, "error": "Tee-time page is no longer active. Please fetch tee times again."}
+            if search_id is not None and str(search_id) != str(ctx.get("search_id") or ""):
+                return {"success": False,
+                        "error": "Search context changed. Please fetch tee times again."}
 
             # Defense-in-depth: the pooled session's glf109e page reflects the
             # LAST search. If the frontend is now asking to book against a
             # different date / golfers / party size than that search, refuse —
             # otherwise we would book the stale row while the confirmation sheet
             # and email describe the golfer's newer selection.
-            if expected_date and str(expected_date).strip() != str(ctx.get("date_str", "")).strip():
+            if expected_date is not None and str(expected_date).strip() != str(ctx.get("date_str", "")).strip():
                 return {"success": False,
                         "error": "Your date changed since you searched. Please fetch tee times again."}
             if expected_num_golfers is not None:
@@ -938,13 +1218,30 @@ class GolfService:
                         return {"success": False,
                                 "error": "Your golfers changed since you searched. Please fetch tee times again."}
                 except (TypeError, ValueError):
-                    pass
+                    return {"success": False,
+                            "error": "Your golfers changed since you searched. Please fetch tee times again."}
             if expected_golfer_ids is not None:
                 want = sorted(str(g).strip() for g in expected_golfer_ids if str(g).strip())
                 have = sorted(str(g).strip() for g in (ctx.get("golfer_ids") or []))
-                if want and want != have:
+                if want != have:
                     return {"success": False,
                             "error": "Your golfers changed since you searched. Please fetch tee times again."}
+            if (expected_course_type is not None
+                    and str(expected_course_type).strip() != str(ctx.get("course_type") or "")):
+                return {"success": False,
+                        "error": "Your course type changed since you searched. Please fetch tee times again."}
+            if (expected_has_guests is not None
+                    and bool(expected_has_guests) != bool(ctx.get("has_guests"))):
+                return {"success": False,
+                        "error": "Your guest selection changed since you searched. Please fetch tee times again."}
+
+            offered = {
+                (str(course or ""), str(slot_time or ""))
+                for course, slot_time in (ctx.get("offered_times") or [])
+            }
+            if (course_name, time_str) not in offered:
+                return {"success": False,
+                        "error": "That tee time was not part of this search. Please fetch tee times again."}
 
             # Click the course/time row on glf109e
             rows = page.query_selector_all("table tr")
@@ -986,17 +1283,21 @@ class GolfService:
                 self._close_active()
                 return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
 
-            # Replicate the redirect() function's submit logic
-            page.evaluate(f"""
-                const form = document.golfers;
-                const rowNum = {alloc_row_num};
-                form.pick.value = form.pickin.value.substr((rowNum - 1) * 7, 7) + '{ctx.get("num_golfers", 1)}';
-                form.rows.value = '1';
-                form.crshl.value = 'x';
-                form.cfmt.value = 'x';
-                form.availw.value = 'x';
-                form.submit();
-            """)
+            # Set the boundary before invoking submit: evaluate itself can fail
+            # after the browser has already sent the form.
+            submission_attempted = True
+            page.evaluate(
+                """({rowNum, numGolfers}) => {
+                    const form = document.golfers;
+                    form.pick.value = form.pickin.value.substr((rowNum - 1) * 7, 7) + String(numGolfers);
+                    form.rows.value = '1';
+                    form.crshl.value = 'x';
+                    form.cfmt.value = 'x';
+                    form.availw.value = 'x';
+                    form.submit();
+                }""",
+                {"rowNum": alloc_row_num, "numGolfers": ctx.get("num_golfers", 1)},
+            )
             # The form is now submitted. Everything below is confirmation, NOT
             # commit \u2014 so a timeout or a differently-worded confirmation page
             # does NOT mean the booking failed. Never report a plain failure
@@ -1018,37 +1319,27 @@ class GolfService:
             # reworded page, or a silent commit), reconcile against the live
             # reservations list before deciding success/failure.
             if not res_no:
-                found = self._find_booked_reservation(
+                return self._reconcile_booking_outcome(
                     page, tvn_username, tvn_password, golf_password,
-                    time_str, expected_date,
+                    ctx, course_name, time_str,
                 )
-                if found and found.get("reservation_no"):
-                    res_no = found["reservation_no"]
-                else:
-                    # Genuinely unconfirmed. Drop the (unknown-state) session and
-                    # tell the golfer to verify rather than blindly rebook.
-                    self._close_active()
-                    return {
-                        "success": False,
-                        "unknown": True,
-                        "error": ("We could not confirm your booking. Open \u201cMy Tee "
-                                  "Times\u201d to check whether it went through before "
-                                  "trying again."),
-                    }
 
-            return {
-                "success":        True,
-                "reservation_no": res_no,
-                "course":         course_name,
-                "time":           time_str,
-                "display_time":   _display_time(time_str),
-                "message":        f"Booked! Reservation #{res_no} \u2014 {course_name} at {_display_time(time_str)}",
-            }
+            return self._booking_success(res_no, course_name, time_str, ctx)
 
         except PWTimeout:
+            if submission_attempted and page is not None:
+                return self._reconcile_booking_outcome(
+                    page, tvn_username, tvn_password, golf_password,
+                    ctx, course_name, time_str,
+                )
             self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
+            if submission_attempted and page is not None:
+                return self._reconcile_booking_outcome(
+                    page, tvn_username, tvn_password, golf_password,
+                    ctx, course_name, time_str,
+                )
             self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
@@ -1058,6 +1349,11 @@ class GolfService:
                 course_name,
                 time_str,
             )
+            if submission_attempted and page is not None:
+                return self._reconcile_booking_outcome(
+                    page, tvn_username, tvn_password, golf_password,
+                    ctx, course_name, time_str,
+                )
             self._close_active()
             return {"success": False, "error": "Booking failed. Please try again."}
 
@@ -1291,40 +1587,134 @@ class GolfService:
             raise RuntimeError("Could not add all chosen courses. Please try again.")
 
     def _fill_request_golfers(self, page, golfer_ids):
-        """On glf105b, pick golfers via the buddy1..4 dropdowns, then finalize.
+        """On glf105b, select every requested golfer and verify the result.
 
         Each buddyN <select> fires onchange=sel2inp(...) which writes the
         golfer's ID into the hidden 'glfers' field the backend reads, so the
         golfer must be chosen THROUGH the dropdown (select_option fires change),
-        not by writing 'glfers' directly. Then click 'Complete the
-        Request/Template' (but2 -> redirect(form, rwin, 2)) to submit."""
+        not by writing 'glfers' directly. Submission is deliberately performed
+        by the caller after this method verifies all slots."""
         ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
         if not ids:
             raise RuntimeError("No golfer IDs provided for request.")
+        if len(ids) > 4:
+            raise RuntimeError("A request can include at most four golfers.")
+        if any(not gid.isdigit() for gid in ids):
+            raise RuntimeError("Golfer IDs must contain only numbers.")
+        if len(set(ids)) != len(ids):
+            raise RuntimeError("Each golfer can be selected only once.")
 
-        placed = 0
-        for idx, gid in enumerate(ids[:4]):  # Group 1 = up to 4 slots
+        selected = []
+        for idx, gid in enumerate(ids):
             sel = page.locator(f'select[name="buddy{idx + 1}"]')
             if sel.count() == 0:
-                break
+                raise RuntimeError(f"Golfer slot {idx + 1} was not available on the request page.")
             try:
                 sel.first.select_option(value=gid)  # onchange -> sel2inp -> glfers
-                placed += 1
+                actual = sel.first.input_value()
+                if str(actual).strip() != gid:
+                    raise RuntimeError("selection did not stick")
+                selected.append(gid)
             except Exception:
                 logger.warning(
                     "requests.golfer_not_in_dropdown id=%s slot=%s", gid, idx + 1
                 )
-        if placed == 0:
-            raise RuntimeError("None of the selected golfers were available to add.")
+                raise RuntimeError(
+                    f"Golfer {gid} was not available in request slot {idx + 1}."
+                )
+        if selected != ids:
+            raise RuntimeError("Could not select every requested golfer.")
 
+    def _submit_request_selection(self, page):
+        """Cross the request commit boundary after all selections validate."""
         with page.expect_navigation(wait_until="domcontentloaded", timeout=25000):
-            page.locator('input[name="but2"]').first.click()  # Complete the Request/Template
+            page.locator('input[name="but2"]').first.click()
+
+    def _extract_requests(self, page):
+        """Parse a verified requests landing page; empty means verified empty."""
+        payload = page.evaluate("""() => {
+            const rows = Array.from(document.querySelectorAll('table tr')).map(row => {
+                const cells = Array.from(row.querySelectorAll('td')).map(c =>
+                    (c.innerText || '').replace(/\\s+/g, ' ').trim()
+                );
+                const links = Array.from(row.querySelectorAll('a')).map(a => ({
+                    text: (a.innerText || '').replace(/\\s+/g, ' ').trim(),
+                    href: a.getAttribute('href') || '',
+                }));
+                return {cells, links};
+            }).filter(row => row.cells.some(Boolean));
+            const body = (document.body && document.body.innerText || '');
+            const valid = /glf105a/i.test(location.pathname + location.search) &&
+                /(requests and templates|create new request|no (?:open |pending )?requests)/i.test(body);
+            return {valid, rows};
+        }""")
+        if not isinstance(payload, dict) or not payload.get("valid"):
+            raise RuntimeError("The requests page layout was not recognized.")
+
+        requests_out = []
+        for row in payload.get("rows") or []:
+            cells = row.get("cells") or []
+            links = row.get("links") or []
+            if len(cells) < 3:
+                continue
+            action, name, request_date = (str(cells[i] or "").strip() for i in range(3))
+            if not action or "create new" in action.lower() or "action" in action.lower():
+                continue
+            rid = None
+            joined = " ".join([action, name] + [link.get("href", "") for link in links])
+            match = re.search(r"(?:Request\s*(?:No\.?)?\s*)?(?<!\d)(\d{5,})(?!\d)", joined, re.IGNORECASE)
+            if match:
+                rid = match.group(1)
+            if rid:
+                requests_out.append({
+                    "request_id": rid,
+                    "action": action,
+                    "name": name,
+                    "date": request_date,
+                })
+        return requests_out
 
     def _extract_request_confirmation(self, page):
         """On the confirmation page, scrape the Request No."""
         body = page.inner_text("body")
         m = re.search(r"Request\s*No\.?\s*[:\-]?\s*(\d+)", body, re.IGNORECASE)
         return m.group(1) if m else None
+
+    def _reconcile_new_request(self, page, tvn_username, tvn_password,
+                               golf_password, preexisting_ids):
+        if preexisting_ids is None:
+            return None
+        try:
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(
+                page, tvn_username, tvn_password, golf_password
+            )
+            requests_out = self._extract_requests(page)
+        except Exception:
+            logger.exception("request submit reconciliation failed user=%s", tvn_username)
+            return None
+        new_ids = [
+            item["request_id"] for item in requests_out
+            if item.get("request_id") not in preexisting_ids
+        ]
+        return new_ids[0] if len(new_ids) == 1 else None
+
+    def _reconcile_request_absent(self, page, tvn_username, tvn_password,
+                                  golf_password, request_id):
+        try:
+            self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
+            self._nav_to_requests_landing(
+                page, tvn_username, tvn_password, golf_password
+            )
+            requests_out = self._extract_requests(page)
+        except Exception:
+            logger.exception(
+                "request delete reconciliation failed user=%s request=%s",
+                tvn_username, request_id,
+            )
+            return None, None
+        exists = any(item.get("request_id") == request_id for item in requests_out)
+        return not exists, requests_out
 
     def fetch_request_courses(self, tvn_username, tvn_password, golf_password,
                               play_date, course_type="Championship",
@@ -1382,10 +1772,29 @@ class GolfService:
                        any_course, time_to_play, earliest_time, latest_time,
                        preference, course_choices, golfer_ids):
         """Submit a tee-time request. Returns {success, request_no}."""
+        submission_attempted = False
+        page = None
+        preexisting_ids = None
         try:
+            ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
+            try:
+                party_limit = int(max_golfers)
+            except (TypeError, ValueError):
+                party_limit = 0
+            if party_limit < 1 or party_limit > 4:
+                return {"success": False, "error": "Max golfers must be between 1 and 4."}
+            if len(ids) > party_limit:
+                return {"success": False,
+                        "error": "Selected golfers cannot exceed max golfers."}
+            if not ids or len(ids) > 4 or len(set(ids)) != len(ids) or any(not gid.isdigit() for gid in ids):
+                return {"success": False,
+                        "error": "Golfer IDs must be unique numeric values, with at most four selected."}
+
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
+            before = self._extract_requests(page)
+            preexisting_ids = {item["request_id"] for item in before}
             self._open_create_new_request(page)
             self._fill_request_form(
                 page,
@@ -1400,24 +1809,74 @@ class GolfService:
                 preference=preference,
             )
             self._select_request_courses(page, course_choices)
-            self._fill_request_golfers(page, golfer_ids)
+            self._fill_request_golfers(page, ids)
+            submission_attempted = True
+            self._submit_request_selection(page)
             request_no = self._extract_request_confirmation(page)
             self._active.ts = _time.time()
             if not request_no:
-                return {"success": False, "error": "Request submitted but no confirmation number was returned."}
+                request_no = self._reconcile_new_request(
+                    page, tvn_username, tvn_password, golf_password,
+                    preexisting_ids,
+                )
+            if not request_no:
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the request was submitted. "
+                    "Open My Requests and verify before trying again."
+                )
             return {
                 "success": True,
                 "request_no": request_no,
                 "message": f"Request #{request_no} submitted",
             }
         except PWTimeout:
+            if submission_attempted and page is not None:
+                request_no = self._reconcile_new_request(
+                    page, tvn_username, tvn_password, golf_password,
+                    preexisting_ids,
+                )
+                if request_no:
+                    return {"success": True, "request_no": request_no,
+                            "message": f"Request #{request_no} submitted"}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the request was submitted. "
+                    "Open My Requests and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
+            if submission_attempted and page is not None:
+                request_no = self._reconcile_new_request(
+                    page, tvn_username, tvn_password, golf_password,
+                    preexisting_ids,
+                )
+                if request_no:
+                    return {"success": True, "request_no": request_no,
+                            "message": f"Request #{request_no} submitted"}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the request was submitted. "
+                    "Open My Requests and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("submit_request failed for user=%s", tvn_username)
+            if submission_attempted and page is not None:
+                request_no = self._reconcile_new_request(
+                    page, tvn_username, tvn_password, golf_password,
+                    preexisting_ids,
+                )
+                if request_no:
+                    return {"success": True, "request_no": request_no,
+                            "message": f"Request #{request_no} submitted"}
+                self._close_active()
+                return _unknown_result(
+                    "We could not confirm whether the request was submitted. "
+                    "Open My Requests and verify before trying again."
+                )
             self._close_active()
             return {"success": False, "error": "Could not submit request. Please try again."}
 
@@ -1427,56 +1886,10 @@ class GolfService:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
-
-            raw_rows = page.evaluate("""() => {
-                const rows = Array.from(document.querySelectorAll('table tr'));
-                return rows.map(row => {
-                    const cells = Array.from(row.querySelectorAll('td')).map(c =>
-                        (c.innerText || '').replace(/\\s+/g, ' ').trim()
-                    );
-                    const links = Array.from(row.querySelectorAll('a')).map(a => ({
-                        text: (a.innerText || '').trim(),
-                        href: a.getAttribute('href') || '',
-                    }));
-                    return { cells, links };
-                }).filter(r => r.cells.some(Boolean));
-            }""")
-
-            requests_out = []
-            for row in raw_rows:
-                cells = row.get("cells") or []
-                links = row.get("links") or []
-                if len(cells) < 3:
-                    continue
-                action = (cells[0] or "").strip()
-                name = (cells[1] or "").strip()
-                date = (cells[2] or "").strip()
-                lower = action.lower()
-                if not action or "create new" in lower or "action" in lower:
-                    continue
-                # An existing request row will have a request number we can use as ID.
-                rid = None
-                for link in links:
-                    href = link.get("href", "")
-                    m = re.search(r"(\d{5,})", href)
-                    if m:
-                        rid = m.group(1)
-                        break
-                if not rid:
-                    m = re.search(r"(\d{5,})", " ".join([action, name]))
-                    if m:
-                        rid = m.group(1)
-                if not rid:
-                    continue
-                requests_out.append({
-                    "request_id": rid,
-                    "action": action,
-                    "name": name,
-                    "date": date,
-                })
+            requests_out = self._extract_requests(page)
 
             self._active.ts = _time.time()
-            return {"success": True, "requests": requests_out}
+            return {"success": True, "verified": True, "requests": requests_out}
         except PWTimeout:
             self._close_active()
             return {"success": False, "error": _timeout_error()}
@@ -1497,51 +1910,85 @@ class GolfService:
         the row by exact request number (not loose substring) and pick the
         delete link specifically (never 'View'/'Change'), then confirm we are on
         the right request before finalizing."""
+        submission_attempted = False
+        page = None
+        target = str(target_request_id or "").strip()
+
+        def reconciled_result():
+            absent, requests_out = self._reconcile_request_absent(
+                page, tvn_username, tvn_password, golf_password, target
+            )
+            if absent is True:
+                return {"success": True, "verified": True, "request_id": target,
+                        "requests": requests_out, "message": f"Request {target} canceled"}
+            if absent is False:
+                return {"success": False,
+                        "error": "Request still appears on the site after delete attempt."}
+            self._close_active()
+            return _unknown_result(
+                "We could not confirm whether the request was canceled. "
+                "Open My Requests and verify before trying again."
+            )
+
         try:
+            if not target.isdigit():
+                return {"success": False, "error": "A valid request number is required."}
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
             self._nav_to_requests_landing(page, tvn_username, tvn_password, golf_password)
-            target = str(target_request_id).strip()
+            current = self._extract_requests(page)
+            if not any(item.get("request_id") == target for item in current):
+                return {"success": False, "error": "Request not found."}
 
-            # Tag the delete link of the row whose Request No. matches exactly.
             found = page.evaluate("""(rid) => {
                 const rows = Array.from(document.querySelectorAll('table tr'));
                 const tok = new RegExp('(^|\\\\D)' + rid + '(\\\\D|$)');
                 for (const row of rows) {
-                    const cells = Array.from(row.querySelectorAll('td')).map(c => (c.innerText||'').trim());
-                    if (!tok.test(cells.join(' | '))) continue;
-                    const del = Array.from(row.querySelectorAll('a')).find(a =>
-                        /delete/i.test(a.innerText || '') && !/do not/i.test(a.innerText || ''));
-                    if (del) { del.setAttribute('data-del-target', '1'); return true; }
+                    const cells = Array.from(row.querySelectorAll('td')).map(c => (c.innerText || '').trim());
+                    const links = Array.from(row.querySelectorAll('a'));
+                    const identityText = cells.join(' | ') + ' | ' + links.map(a => a.href || '').join(' | ');
+                    if (!tok.test(identityText)) continue;
+                    const del = links.find(a => /^delete\\s+this\\s+request$/i.test(
+                        (a.innerText || '').replace(/\\s+/g, ' ').trim()
+                    ));
+                    if (del) { del.setAttribute('data-del-target', rid); return true; }
                 }
                 return false;
             }""", target)
             if not found:
-                return {"success": False, "error": "Request not found."}
+                return {"success": False, "error": "Delete action is not available for this request."}
 
-            # Step 1: open the delete-confirmation page (glf105e).
             with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
-                page.locator('a[data-del-target="1"]').first.click(timeout=8000)
+                page.locator(f'a[data-del-target="{target}"]').first.click(timeout=8000)
 
-            # Guard: make sure the confirmation page is for THIS request.
-            if target not in page.inner_text("body"):
-                self._login(page, tvn_username, tvn_password, golf_password)
+            confirm_text = _normalize_space(page.inner_text("body"))
+            confirm_match = re.search(
+                r"Request\s*(?:No\.?)?\s*[:\-]?\s*(\d+)", confirm_text, re.IGNORECASE
+            )
+            if not confirm_match or confirm_match.group(1) != target:
                 return {"success": False,
-                        "error": "Could not confirm the request to cancel. Please try again."}
+                        "error": "The delete confirmation did not identify the requested request."}
 
-            # Step 2: finalize — the confirm control is an anchor, not a button.
+            confirm_link = page.locator("a", has_text="Delete This Request")
+            if confirm_link.count() == 0:
+                return {"success": False, "error": "Final request delete control was not found."}
+            submission_attempted = True
             with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
-                page.locator("a", has_text="Delete This Request").first.click(timeout=8000)
-
-            self._active.ts = _time.time()
-            return {"success": True, "message": f"Request {target} canceled"}
+                confirm_link.first.click(timeout=8000)
+            return reconciled_result()
         except PWTimeout:
+            if submission_attempted and page is not None:
+                return reconciled_result()
             self._close_active()
             return {"success": False, "error": _timeout_error()}
         except RuntimeError as e:
+            if submission_attempted and page is not None:
+                return reconciled_result()
             self._close_active()
             return {"success": False, "error": str(e)}
         except Exception:
             logger.exception("delete_request failed for user=%s", tvn_username)
+            if submission_attempted and page is not None:
+                return reconciled_result()
             self._close_active()
             return {"success": False, "error": "Could not cancel that request. Please try again."}

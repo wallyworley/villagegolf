@@ -1,0 +1,91 @@
+/* Mobile-first course, routing, and preference experience. */
+.app-nav { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.app-tab { min-height:48px; }
+.tile,.t-tile,.d-card,.g-card { font:inherit; color:var(--text); background:var(--card); width:100%; }
+.exact-time-panel { margin-top:14px; padding:13px; border:1px solid var(--gb); border-radius:12px; background:var(--gl); }
+.exact-time-heading { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.45px; color:var(--g2); margin-bottom:8px; }
+.time-window-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.time-window-fields label { font-size:12px; font-weight:700; color:var(--muted); }
+.time-window-fields input { display:block; width:100%; min-height:44px; margin-top:5px; padding:8px; border:1.5px solid var(--gb); border-radius:9px; color:var(--text); background:var(--card); }
+.field-help,.map-note { color:var(--muted); font-size:11px; line-height:1.45; margin-top:7px; }
+.course-filter-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
+.course-filter-row .field-input { font-size:13px; padding:10px; }
+.favorite-filter { grid-column:1/-1; min-height:42px; border:1.5px solid var(--gb); border-radius:10px; padding:10px 12px; font-size:13px; font-weight:700; display:flex; align-items:center; gap:8px; }
+.favorite-filter input { width:18px; height:18px; accent-color:var(--g2); }
+.course-map-wrap { position:relative; }
+.course-map { position:relative; width:100%; aspect-ratio:1.45; min-height:230px; overflow:hidden; border:1px solid var(--gb); border-radius:14px; touch-action:none; }
+.course-map.leaflet-container { background:#e3ecdf; }
+/* Each map is its own stacking context so Leaflet's internal z-indexes (panes 400,
+   controls 1000) never paint over the course modal or other page chrome. */
+.course-map, .route-map { position:relative; z-index:0; isolation:isolate; }
+.course-map svg { display:block; width:100%; height:100%; }
+.map-fallback-note { position:absolute; left:8px; bottom:8px; font-size:12px; padding:3px 7px; border-radius:6px; background:rgba(255,255,255,.85); color:#3a4a3e; }
+.map-zoom-btn { min-width:40px; min-height:40px; border:1.5px solid var(--gb); border-radius:8px; background:rgba(255,255,255,.92); color:var(--g2); font-size:18px; font-weight:800; line-height:1; cursor:pointer; box-shadow:0 2px 7px rgba(0,0,0,.22); }
+.map-zoom-reset { font-size:11px; font-weight:800; }
+.map-pin,.map-home-pin { position:absolute; transform:translate(-50%,-50%); width:27px; height:27px; border-radius:50%; display:grid; place-items:center; }
+.map-pin { border:2px solid #fff; background:var(--g2); color:#fff; box-shadow:0 2px 7px rgba(0,0,0,.28); font-size:11px; font-weight:800; cursor:pointer; }
+.map-pin.favorite { background:var(--brass); color:#211804; }
+.map-pin.map-pin-dot { width:14px; height:14px; }
+.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.course-list { display:flex; flex-direction:column; gap:9px; margin-top:12px; }
+.course-card { border:1.5px solid var(--gb); border-radius:13px; padding:12px; background:var(--card); }
+.course-card-top { display:flex; align-items:flex-start; gap:9px; }
+.course-open { flex:1; min-width:0; border:0; padding:0; text-align:left; background:transparent; color:var(--text); cursor:pointer; }
+.course-card-name { font-size:15px; font-weight:800; line-height:1.25; display:flex; align-items:center; gap:6px; }
+.pin-no { flex:none; display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--g2); color:#fff; font-size:11px; font-weight:800; }
+.course-card-meta { font-size:12px; color:var(--muted); line-height:1.4; margin-top:3px; }
+.favorite-btn { flex:none; width:44px; height:44px; border:1px solid var(--gb); border-radius:50%; background:var(--card); color:var(--muted); font-size:22px; cursor:pointer; }
+.favorite-btn.on { color:#8a641b; background:#fff6d8; border-color:#d9bb6a; }
+.area-description { font-size:12px; color:var(--muted); line-height:1.45; margin-top:8px; }
+.centered-overlay { align-items:center; padding:12px; }
+.course-modal { position:relative; width:min(100%,600px); max-height:92vh; overflow:auto; background:var(--card); border-radius:18px; padding:22px 18px; box-shadow:0 18px 50px rgba(0,0,0,.3); outline:none; }
+.modal-close { position:absolute; right:12px; top:12px; width:44px; height:44px; z-index:2; border:1px solid var(--gb); border-radius:50%; background:var(--card); color:var(--text); cursor:pointer; }
+.course-modal h2 { padding-right:48px; font-size:21px; line-height:1.2; }
+.detail-kicker { color:var(--g2); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+.detail-address { color:var(--muted); font-size:13px; line-height:1.5; margin-top:8px; }
+.detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:15px 0; }
+.detail-item { background:var(--gl); border-radius:10px; padding:10px; }
+.detail-item dt { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.4px; }
+.detail-item dd { font-size:13px; font-weight:700; margin-top:3px; }
+.detail-actions,.preference-actions,.preset-row,.location-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.secondary-btn,.location-btn,.detail-link { min-height:42px; border:1.5px solid var(--g3); border-radius:10px; padding:10px 12px; background:var(--card); color:var(--g2); font-size:13px; font-weight:750; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.route-panel { margin-top:15px; }
+.route-summary { background:var(--gl); border:1px solid var(--gb); border-radius:12px; padding:12px; }
+.route-headline { font-weight:800; font-size:17px; color:var(--g2); }
+.route-meta { color:var(--muted); font-size:11px; line-height:1.4; margin-top:4px; }
+.route-map { width:100%; aspect-ratio:1.8; margin-top:10px; border:1px solid var(--gb); border-radius:10px; overflow:hidden; background:#edf4e9; }
+.route-map.leaflet-container { background:#edf4e9; }
+.route-turns { margin:12px 0 0; padding-left:22px; }
+.route-turns li { padding:5px 0; color:var(--text); font-size:13px; line-height:1.4; }
+.route-turn-distance { display:block; color:var(--muted); font-size:11px; }
+.home-summary { padding:11px 12px; border-radius:10px; background:var(--gl); color:var(--text); font-size:13px; line-height:1.4; }
+.preference-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:15px; }
+.preference-grid .field-label { text-transform:none; letter-spacing:0; line-height:1.3; }
+.preference-grid input { margin-top:6px; }
+.preset-row .field-input { flex:1 1 180px; }
+.weather-detail { margin:9px 0 2px; padding:9px 11px; border-radius:9px; background:var(--gl); font-size:12px; color:var(--text); }
+.weather-updated { color:var(--muted); font-size:10px; margin-top:3px; }
+.time-row { cursor:default; gap:10px; }
+.time-row-main { flex:1; min-width:0; border:0; background:transparent; padding:0; color:inherit; text-align:left; cursor:pointer; }
+.time-row-actions { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+.time-row .location-btn { min-height:36px; padding:7px 9px; }
+.rq-sel-row .location-btn { min-height:38px; padding:8px; font-size:11px; }
+.calendar-btn { background:#edf5ff; color:#215b91; border-color:#b9d4ec; }
+.any-course-note { margin:-4px 0 14px; padding:10px 12px; background:#fff7dd; border:1px solid #ead18a; border-radius:10px; color:#5d4816; font-size:12px; line-height:1.45; display:none; }
+.switch-user-btn { width:100%; border:0; background:transparent; padding:12px; }
+@media (min-width:760px) {
+  .wrap { max-width:960px; }
+  .app-nav { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .course-filter-row { grid-template-columns:1fr 1fr auto; }
+  .favorite-filter { grid-column:auto; }
+  .course-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .course-map { aspect-ratio:2.1; }
+}
+@media (prefers-color-scheme:dark) {
+  .course-map.leaflet-container,.route-map.leaflet-container { background:#1d2c20; }
+  .map-fallback-note { background:rgba(20,30,22,.85); color:#dce8dd; }
+  .map-zoom-btn { background:rgba(20,30,22,.88); color:#dce8dd; border-color:#3a4a3e; }
+  .favorite-btn.on { color:#f0c86a; background:#493b16; border-color:#8e7331; }
+  .any-course-note { background:#3d3212; border-color:#725f25; color:#f1dda1; }
+  .calendar-btn { background:#152b3d; color:#a9d2f5; border-color:#315c7d; }
+}

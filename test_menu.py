@@ -1,11 +1,15 @@
 import os
 import time
+import argparse
 from dotenv import load_dotenv
 
-load_dotenv("/Users/walterworley/Documents/villages-golf-app/.env")
 from golf_service import GolfService
 
-def test():
+def main():
+    parser = argparse.ArgumentParser(description="Opt-in live menu diagnostic; never part of automated tests.")
+    parser.add_argument("--live", action="store_true", required=True)
+    parser.parse_args()
+    load_dotenv()
     service = GolfService()
     print("Fetching buddies...")
     buddies = service.fetch_buddy_list(
@@ -27,4 +31,4 @@ def test():
 
 if __name__ == "__main__":
     os.environ["HEADLESS"] = "true"
-    test()
+    main()
