@@ -4,7 +4,8 @@ The app runs on a self-hosted VPS. gunicorn serves it, Caddy terminates TLS and 
 
 ## Server layout
 
-- Host: `root@40.160.233.235` (SSH via key).
+- Host: `root@152.53.82.29` (SSH via key; `ssh new-vps` uses the Mac's SSH config alias). The app moved here from `40.160.233.235`, which no longer answers.
+- Deploys are manual. The server's `deploy-pull.timer` updates other projects every 15 minutes but not this app, so a push to GitHub never changes the live site until you run the steps in "Deploy a code update".
 - App directory: `/opt/villages-golf-app` (a git checkout of `master`).
 - Process: gunicorn (1 worker, 4 threads, `--timeout 300`) bound to `127.0.0.1:8080`, managed by the systemd unit `villages-golf.service`. This timeout value lives in the systemd unit file, so edit it there, not in this guide.
 - TLS and reverse proxy: Caddy on 443 auto-provisions a Let's Encrypt certificate and proxies to `127.0.0.1:8080`. Do not install nginx (it would conflict on ports 80/443).
@@ -26,7 +27,7 @@ Back up the database and record the current commit, so you can roll back if the 
 
 1. Back up the database:
    ```bash
-   ssh root@40.160.233.235
+   ssh root@152.53.82.29
    cd /opt/villages-golf-app
    cp users.db "users.db.bak-$(date +%Y%m%d-%H%M%S)"
    ```
@@ -44,7 +45,7 @@ Push to `master`, then pull, reinstall dependencies, and restart on the VPS:
 git push origin master
 
 # on the VPS
-ssh root@40.160.233.235
+ssh root@152.53.82.29
 cd /opt/villages-golf-app
 git pull --ff-only origin master
 .venv/bin/pip install -r requirements.txt
@@ -61,7 +62,7 @@ Playwright 1.62.0 needs its matching Chromium build, so run `playwright install 
 Check out the previous commit, reinstall dependencies, and restart:
 
 ```bash
-ssh root@40.160.233.235
+ssh root@152.53.82.29
 cd /opt/villages-golf-app
 git checkout <previous-commit>
 .venv/bin/pip install -r requirements.txt
@@ -78,7 +79,7 @@ Use the commit you recorded in "Before you deploy" as `<previous-commit>`. The c
 All config lives in `/opt/villages-golf-app/.env`. Edit the file, then restart so systemd re-reads it:
 
 ```bash
-ssh root@40.160.233.235
+ssh root@152.53.82.29
 cd /opt/villages-golf-app
 nano .env          # e.g. MAILERSEND_API_TOKEN, MAIL_FROM_EMAIL, MAIL_FROM_NAME
 systemctl restart villages-golf.service
