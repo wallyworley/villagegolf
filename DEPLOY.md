@@ -87,6 +87,23 @@ systemctl restart villages-golf.service
 
 Common vars: `SECRET_KEY`, `MAILERSEND_API_TOKEN`, `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME`, `USER_DB_ENCRYPTION_KEY`, `LOG_LEVEL`. Do not set the local-dev-only flags `SESSION_COOKIE_SECURE=0` or `ALLOW_PLAINTEXT_USER_DB=1` on the VPS.
 
+## Backups
+
+A systemd timer backs up the user database every night and keeps the last 14 daily copies.
+
+- Schedule: `villages-golf-backup.timer` runs at 07:15 UTC (3:15 AM Eastern in summer, 2:15 AM in winter).
+- Script: `/usr/local/bin/villages-golf-backup.sh` copies `users.db` with SQLite's online backup, checks its integrity, and deletes copies older than 14 days.
+- Location: `/opt/villages-golf-backups/nightly/users-YYYY-MM-DD.db` (root only). Pre-deploy backups live in timestamped folders beside it.
+
+To run a backup now or check the last run:
+
+```bash
+systemctl start villages-golf-backup.service
+journalctl -u villages-golf-backup.service -n 5
+```
+
+These copies sit on the same disk as the app, so they do not protect against losing the server itself.
+
 ## View logs
 
 ```bash
