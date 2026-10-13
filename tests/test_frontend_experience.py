@@ -1,5 +1,6 @@
 """Offline regressions for the single-page website integration contract."""
 
+import json
 import re
 import shutil
 import subprocess
@@ -58,6 +59,151 @@ def _extract_const_statement(source, name):
 
 
 class FrontendExperienceTests(unittest.TestCase):
+    def run_behavior(self, assertions):
+        """Execute the shipped enhancement code with a small, offline DOM double."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        harness = r"""
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const nodes = new Map();
+function element() {
+  const classes = new Set();
+  return {value:'', checked:false, disabled:false, innerHTML:'', textContent:'', style:{}, dataset:{},
+    classList:{add:(...xs)=>xs.forEach(x=>classes.add(x)),remove:(...xs)=>xs.forEach(x=>classes.delete(x)),contains:x=>classes.has(x),toggle:(x,on)=>on?classes.add(x):classes.delete(x)},
+    setAttribute(){}, removeAttribute(){}, focus(){}, remove(){}, appendChild(x){return x;},
+    querySelector(){return element();},querySelectorAll(){return [];},addEventListener(){},insertAdjacentHTML(){},insertAdjacentElement(){},
+    options:[], isConnected:true};
+}
+const context = {
+  assert, console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+  document:{getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id);},
+    querySelector(){return element();},querySelectorAll(){return [];},createElement:element,
+    addEventListener(){},contains(){return true;},body:element(),activeElement:element()},
+  window:{addEventListener(){},isSecureContext:true}, navigator:{},
+  S:{date:'20260912',dateLabel:'Saturday',course:'Executive',regionFilter:'all',golfers:['111'],guests:false,timeFilter:'all'},
+  SR:{}, BUDDIES:[{id:'111',name:'Preview Golfer'}], BOOKING_IN_FLIGHT:false, MY_TEE_TIMES:[],
+  _wxCache:null, WX_LABELS:{}, esc:value=>String(value??''), baseCalls:{},
+  closeConfirm(){}, showError(message){context.lastError=message;}, checkFetch(){},
+  rqFormatDateForApi(){return '20260918';},rqSaveRecents(){},
+};
+for(const match of SOURCE.matchAll(/^(\w+)=(?:async )?function/gm))context[match[1]]=()=>{};
+for(const match of SOURCE.matchAll(/^const base\w+=(\w+);/gm))context[match[1]]=(...args)=>{context.baseCalls[match[1]]=args;};
+vm.createContext(context);
+vm.runInContext(SOURCE,context);
+vm.runInContext('(async()=>{'+ASSERTIONS+'})()',context).catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        script = "const SOURCE=" + json.dumps(EXPERIENCE_JS) + ";\nconst ASSERTIONS=" + json.dumps(assertions) + ";\n" + harness
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_changed_golfer_selection_cannot_submit_reviewed_booking(self):
+        self.run_behavior("""
+let submissions=0;
+jsonRequest=async()=>{submissions++;return {success:true};};
+EXPERIENCE.searchId='fixture-search';
+EXPERIENCE.searchSnapshot=JSON.stringify(teeSearchPayload());
+openConfirm({course:'Silver Lake',time:'08:15',display_time:'8:15 AM'});
+assert.equal(EXPERIENCE.pendingSnapshot.search_id,'fixture-search');
+S.golfers.push('222');
+await confirmBook();
+assert.equal(submissions,0,'A changed group must require a fresh search, not book the reviewed time.');
+assert.match(lastError,/choices changed/i);
+""")
+
+    def test_map_origin_is_used_once_unless_saving_is_selected(self):
+        self.run_behavior("""
+let saves=0, routes=[];
+updatePreferences=async()=>{saves++;return true;};
+requestCourseRoute=async(id,point)=>routes.push({id,point});
+EXPERIENCE.username='preview';
+EXPERIENCE.originPicker={mode:'route',course:{id:'silver-lake'},point:null};
+selectOriginPickerPoint({lat:28.93,lng:-81.98});
+assert.equal(saves,0,'Selecting a pin must not save a location.');
+assert.equal(routes.length,0,'Selecting a pin must not calculate before confirmation.');
+await confirmOriginPicker();
+assert.equal(saves,0,'One-time origin must not overwrite the saved starting point.');
+assert.equal(routes.length,1);
+assert.equal(routes[0].point.latitude,28.93);
+EXPERIENCE.originPicker={mode:'route',course:{id:'silver-lake'},point:{latitude:28.93,longitude:-81.98}};
+document.getElementById('origin-picker-save').checked=true;
+await confirmOriginPicker();
+assert.equal(saves,1,'Explicit save choice must persist the selected point.');
+""")
+
+    def test_location_callback_cannot_reopen_a_closed_course(self):
+        self.run_behavior("""
+let success, routes=0, saves=0;
+navigator.geolocation={getCurrentPosition(callback){success=callback;}};
+requestCourseRoute=async()=>{routes++;};
+updatePreferences=async()=>{saves++;return true;};
+EXPERIENCE.username='preview';
+EXPERIENCE.courses=[{id:'silver-lake',name:'Silver Lake'}];
+EXPERIENCE.activeCourse=EXPERIENCE.courses[0];
+document.getElementById('course-overlay').classList.add('show');
+useCurrentLocation(false,'silver-lake');
+closeCourseModal();
+await success({coords:{latitude:28.93,longitude:-81.98}});
+assert.equal(routes,0,'A late GPS result must not open directions after closing the course.');
+assert.equal(saves,0);
+""")
+
+    def test_older_route_response_cannot_replace_newer_origin(self):
+        self.run_behavior("""
+let resolvers=[];
+jsonRequest=()=>new Promise(resolve=>resolvers.push(resolve));
+EXPERIENCE.username='preview';
+EXPERIENCE.courses=[{id:'silver-lake',name:'Silver Lake'}];
+EXPERIENCE.activeCourse=EXPERIENCE.courses[0];
+document.getElementById('course-overlay').classList.add('show');
+const first=requestCourseRoute('silver-lake',{latitude:28.93,longitude:-81.98},'First origin');
+const second=requestCourseRoute('silver-lake',{latitude:28.94,longitude:-81.99},'New origin');
+resolvers[1]({success:true,miles:7.2,minutes:30});await second;
+const current=document.getElementById('route-panel').innerHTML;
+resolvers[0]({success:true,miles:1.2,minutes:5});await first;
+assert.equal(document.getElementById('route-panel').innerHTML,current,'Late first route must not overwrite the second route.');
+""")
+
+    def test_next_upcoming_reservation_precedes_past_or_unknown_dates(self):
+        self.run_behavior("""
+const dateIn=days=>{const date=new Date();date.setDate(date.getDate()+days);return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;};
+const items=[
+  {reservation_no:'later',play_date:dateIn(4),display_time:'8:15 AM'},
+  {reservation_no:'past',play_date:dateIn(-2),display_time:'8:15 AM'},
+  {reservation_no:'unknown'},
+  {reservation_no:'next',play_date:dateIn(1),display_time:'9:30 AM'}
+];
+const sorted=sortReservations(items);
+assert.equal(sorted[0].reservation_no,'next');
+assert.equal(sorted[1].reservation_no,'later');
+assert.equal(items[0].reservation_no,'later','Sorting must not mutate the caller list.');
+renderMyTeeTimes(items);
+assert.equal(baseCalls.renderMyTeeTimes[0][0].reservation_no,'next','The base renderer and calendar actions must use the sorted order.');
+""")
+
+    def test_advance_request_requires_confirmation_of_unchanged_choices(self):
+        self.run_behavior("""
+let submissions=[];
+jsonRequest=async(url,options)=>{if(url==='/api/submit-request')submissions.push(JSON.parse(options.body));return {success:true,requests:[]};};
+Object.assign(SR,{maxGolfers:2,course:'Executive',selectedCourses:['Silver Lake'],golfers:['111'],preference:'Course'});
+document.getElementById('rq-date').value='2026-09-18';
+document.getElementById('rq-time').value='09:00';
+document.getElementById('rq-earliest').value='08:00';
+document.getElementById('rq-latest').value='10:00';
+submitRequest();
+assert.equal(submissions.length,0,'Review must never send the request.');
+assert.ok(EXPERIENCE.requestReviewSnapshot);
+document.getElementById('rq-time').value='09:30';
+await confirmSubmitRequest();
+assert.equal(submissions.length,0,'Changed choices need a fresh review.');
+assert.match(document.getElementById('rq-err').textContent,/choices changed/);
+submitRequest();
+await confirmSubmitRequest();
+assert.equal(submissions.length,1);
+assert.equal(submissions[0].time_to_play,'09:30');
+""")
+
     def test_course_experience_assets_and_controls_are_wired(self):
         parser = _IdsAndAssets()
         parser.feed(INDEX)
@@ -132,7 +278,7 @@ for (var i = 0; i < expected.length; i++) {
         source = _extract_function(EXPERIENCE_JS, "useCurrentLocation")
         self.assertIn("isSecureContext", source)
         self.assertIn("secure (https) address", source)
-        self.assertIn("Press and hold the map to save a starting location", source)
+        self.assertIn("Choose a starting point on the map instead", source)
         self.assertIn("error.code===1", source)
 
     def test_find_course_consults_aliases(self):
@@ -189,7 +335,6 @@ if (Math.abs(resolutionAtLevel3 - expectedResolution) >= 1e-15) {
         self.assertIn("/tile/{z}/{y}/{x}", EXPERIENCE_JS)
         self.assertIn("L.tileLayer", EXPERIENCE_JS)
         self.assertIn("L.divIcon", EXPERIENCE_JS)
-        self.assertIn("map-pin-dot", EXPERIENCE_JS)
         self.assertIn("pin-no", EXPERIENCE_JS)
         self.assertIn("contextmenu", EXPERIENCE_JS)
         self.assertIn("invalidateSize", EXPERIENCE_JS)
@@ -197,6 +342,86 @@ if (Math.abs(resolutionAtLevel3 - expectedResolution) >= 1e-15) {
         route_source = _extract_function(EXPERIENCE_JS, "renderRouteMap")
         self.assertIn("L.polyline", route_source)
         self.assertIn(".remove()", route_source)
+
+    def test_course_markers_cluster_without_redrawing_on_pan(self):
+        vendor_dir = ROOT / "static" / "vendor" / "leaflet.markercluster"
+        for relative_path in ("leaflet.markercluster.js", "MarkerCluster.css", "LICENSE.txt"):
+            self.assertTrue((vendor_dir / relative_path).is_file(), f"missing {relative_path}")
+        leaflet = INDEX.index("/static/vendor/leaflet/leaflet.js")
+        cluster = INDEX.index("/static/vendor/leaflet.markercluster/leaflet.markercluster.js")
+        self.assertLess(leaflet, cluster)
+        self.assertLess(cluster, INDEX.index("/static/js/experience.js"))
+        self.assertIn("L.markerClusterGroup(", EXPERIENCE_JS)
+        # Redrawing on every pan closed an open cluster on phones; markers now
+        # rebuild only when the shown courses or favorites change.
+        self.assertNotIn("map.on('moveend'", EXPERIENCE_JS)
+        layers = _extract_function(EXPERIENCE_JS, "renderCourseMapLayers")
+        self.assertIn("markerSignature!==EXPERIENCE.courseMarkerSignature", layers)
+
+    def test_request_list_refresh_cannot_strand_a_submission(self):
+        self.run_behavior("""
+let finishSubmit;
+jsonRequest=(url,options)=>url==='/api/submit-request'
+  ? new Promise(resolve=>{finishSubmit=resolve;})
+  : Promise.resolve({success:true,requests:[]});
+Object.assign(SR,{maxGolfers:2,course:'Executive',selectedCourses:['Silver Lake'],golfers:['111'],preference:'Course'});
+document.getElementById('rq-date').value='2026-09-18';
+document.getElementById('rq-time').value='09:00';
+document.getElementById('rq-earliest').value='08:00';
+document.getElementById('rq-latest').value='10:00';
+submitRequest();
+const pending=confirmSubmitRequest();
+await loadMyRequests();
+clearRequestCourses();
+finishSubmit({success:true,message:'Request #777777 submitted'});
+await pending;
+assert.equal(EXPERIENCE.requestSubmissionInFlight,false);
+assert.equal(document.getElementById('rq-status').textContent,'Request #777777 submitted','A list refresh or form edit must not hide the submission result.');
+""")
+
+    def test_my_tee_times_reload_after_booking_and_wait_after_failure(self):
+        self.run_behavior("""
+let loads=0;
+globalThis.setMyTimesStatus=()=>{};
+jsonRequest=async()=>{loads++;return {success:false,error:'Villages login failed.'};};
+EXPERIENCE.username='preview';
+showAppView('mytimes');
+await new Promise(resolve=>setTimeout(resolve,0));
+assert.equal(loads,1);
+showAppView('book'); showAppView('mytimes');
+await new Promise(resolve=>setTimeout(resolve,0));
+assert.equal(loads,1,'A failed load must wait for the refresh button instead of retrying on every visit.');
+EXPERIENCE.myTimesLoaded=true;
+showSuccess({course:'Silver Lake',display_time:'8:15 AM'});
+assert.equal(EXPERIENCE.myTimesLoaded,false,'A new booking must make My Tee Times reload.');
+EXPERIENCE.myTimesLoaded=true;
+bookingUnconfirmed('Unknown');
+assert.equal(EXPERIENCE.myTimesLoaded,false,'An unknown booking must make My Tee Times reload to verify it.');
+""")
+
+    def test_request_review_uses_plain_twelve_hour_times(self):
+        self.run_behavior("""
+assert.equal(clockLabel('13:05'),'1:05 PM');
+assert.equal(clockLabel('00:15'),'12:15 AM');
+assert.equal(clockLabel('08:00'),'8:00 AM');
+assert.equal(clockLabel('12:30'),'12:30 PM');
+const markup=requestReviewMarkup({play_date:'20260918',golfer_ids:['111'],course_type:'Executive',course_choices:['Silver Lake'],
+  time_to_play:'08:00',earliest_time:'07:00',latest_time:'13:00',preference:'Course',has_guests:false,any_course:false,max_golfers:2});
+assert.match(markup,/7:00 AM to 1:00 PM/);
+assert.doesNotMatch(markup,/13:00/);
+assert.match(markup,/Keeping my course ranking/);
+""")
+
+    def test_dark_mode_text_and_phone_bars_stay_readable(self):
+        dark_blocks = re.findall(r"@media \(prefers-color-scheme:dark\) \{(.*?)\n\}", EXPERIENCE_CSS, re.S)
+        self.assertTrue(any("--ink-accent" in block and "--ink-strong" in block for block in dark_blocks))
+        self.assertIn("--ink-accent: var(--g2)", INDEX)
+        for rule in (".app-tab.active", ".request-group h3", ".request-picker-label", ".text-action"):
+            line = next(line for line in EXPERIENCE_CSS.splitlines() if line.startswith(rule + " "))
+            self.assertRegex(line, r"color:var\(--ink-(accent|strong)\)", rule)
+        self.assertIn("[hidden] { display:none !important; }", EXPERIENCE_CSS)
+        phone = EXPERIENCE_CSS.split("@media (max-width:759px) {", 1)[1].split("\n}", 1)[0]
+        self.assertIn(".rq-done-bar { bottom:calc(88px", phone)
 
 
 if __name__ == "__main__":

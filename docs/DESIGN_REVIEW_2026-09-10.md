@@ -1,233 +1,248 @@
-# Village Fairways — design review
+# Village Fairways — a simpler website experience
 
-Reviewed September 10, 2026, at http://127.0.0.1:8091/.
+Revised September 11, 2026. This replaces the earlier design recommendations in
+this file. The existing filename is retained so links from Claude and Codex keep working.
 
-## Recommendation
+## Direction
 
-Keep the green identity and give the website the feeling of a welcoming local
-clubhouse: clear, comfortable, and connected to the actual places residents play.
-The current version has a coherent foundation. Its biggest weaknesses are small
-supporting text, an unnecessarily narrow desktop layout, a tall repeated header,
-and too many similarly styled boxes competing for attention.
+Keep the useful features, including golf cart directions, and simplify how residents
+reach them. The goal is a mobile website that feels as straightforward as an app:
+familiar navigation, readable screens, and an obvious next action.
 
-This is design guidance, not an implementation change. The live desktop booking
-form, synthetic search results, course finder, and course details were inspected.
-The request form and course detail modal were also inspected in Chrome's 400px
-responsive viewport. This was not a physical iPhone/Safari test or full
-accessibility audit. A smaller agent independently reviewed the HTML and CSS.
-No booking, cancellation, email, or saved-location change was submitted.
+Directions belong in this product. They answer the same practical need as booking:
+“Where am I playing, and how do I get there?” The added capability does not need its
+own top-level destination or a large collection of settings on the course page.
 
-## What is already working
+This pass should refine the existing website. A new dashboard, major rebranding,
+additional features, and a native iOS application are outside the recommended scope.
+Keep the existing booking, advance-request, reservation, and routing behavior stable.
 
-- Forest green, pale neutral backgrounds, and the restrained gold accent fit golf.
-- The consistent line icons are quieter and more coherent than mixed emoji.
-- The large date numbers and named time choices are easy to understand.
-- Selected options are visibly differentiated, and the main search button is clear.
-- Area names such as North of 466 and Between the 6s give useful local context.
-- Course names, addresses, real map imagery, and favorites are a useful foundation.
-- The course modal fits within the inspected phone viewport and has a clear close button.
+## What this review is based on
 
-## Highest-impact changes, in order
+The September 10 review covered the desktop booking form, synthetic search results,
+course finder, and course details, plus the request form and course details in a
+400px Chrome phone preview. The September 11 follow-up inspected the updated local
+course finder and directions entry points at http://127.0.0.1:8091/ and their source.
 
-### 1. Make the layout genuinely responsive
+The newer map already supports zooming, dragging, and resetting the view. Preserve
+those improvements; adding zoom controls is no longer an outstanding recommendation.
+The follow-up did not retest live route accuracy or physical iPhone behavior. No real
+booking, cancellation, email, or saved-location change was submitted for this review.
 
-**Observed:** On desktop the site remains a narrow central column with very large
-empty margins. On the course page, desktop rules put cards into two columns inside
-that narrow container, leaving each card cramped.
+## Keep four familiar destinations
 
-**Cause in source:** `templates/index.html` loads `experience.css` at line 10,
-before the embedded styles. Later `.wrap { max-width:480px }` and two-column
-`.app-nav` rules override the external stylesheet's desktop width and navigation
-rules. Media queries do not increase selector specificity.
+| Destination | Its purpose |
+| --- | --- |
+| Book Tee Time | Find an available time and book it |
+| My Tee Times | See confirmed reservations and get to the course |
+| Advance Requests | Submit preferences and see pending requests |
+| Courses | Find a course, understand its location, and get directions |
 
-**Direction:** Establish one predictable stylesheet order before adding more
-overrides. Use about 1040–1120px of content width on desktop, while keeping form
-fields at a comfortable reading width. Place booking choices beside a compact
-selection summary; put the course list beside a larger map. On phones use one
-column and a clear List / Map switch. This alone should make the site feel much
-more finished.
+Rename “Requests” to “Advance Requests” to explain its purpose. Keep confirmed
+reservations and pending requests visibly distinct.
 
-### 2. Increase readability and reduce decorative weight
+Use consistent navigation with text labels. On phones, a compact persistent bar
+should keep these destinations reachable without scrolling back to the top. Allow
+labels to wrap when needed; do not shrink them to fit. Desktop can use one horizontal
+row. Put a clearly labeled Account control in the compact signed-in header.
 
-**Observed/source:** Course descriptions, field help, weather timestamps, and
-route metadata often use 10–13px text. Entire locked sections are faded to 60%
-opacity. Labels, nested panels, cards, borders, and shadows all compete visually.
+Do not add a separate Home, Dashboard, or Directions tab in this pass.
 
-**Direction:** Aim for 17–18px body text, 15–16px labels, 14px supporting text,
-22–26px section headings, and 30–36px main headings. These are proposed design
-sizes, not WCAG minimum font requirements. Use sentence case for most labels,
-comfortable line spacing, and dark secondary text. Reserve small metadata for
-information that truly is secondary. Keep one level of strong card containment;
-use spacing and subtle dividers inside it.
+## Make cart directions one clear action
 
-Keep locked-step explanations readable. Instead of fading whole cards, show a
-compact next-step message, such as “Choose a date to select your golfers.” Retain
-visible selection checkmarks and keyboard focus, rather than relying on green alone.
+### Where the action belongs
 
-Use 48–52px primary controls and at least 44px interactive targets where practical.
-The present map pins are 27px. Increasing their hit areas must be paired with
-clustering or a list alternative so neighboring targets do not overlap.
+Put **Cart directions** on each reservation and in course details. From a reservation,
+the destination should already be selected. Residents should not have to search for
+the same course again.
 
-These choices align with W3C guidance on contrast, readable presentation, and
-easier controls for older users. Avoid treating all residents as having the same
-needs; test with people who differ in vision, device habits, and golf experience.
+The intended path is:
 
-### 3. Give the brand warmth without delaying the task
+**My Tee Times → next reservation → Cart directions → route preview.**
 
-**Observed:** A large centered gradient header repeats above every working view.
-At the inspected phone size, the header and two navigation rows consume much of
-the initial viewport before the actual task begins. The VF initials alone do
-little to establish a distinctive local identity.
+Within My Tee Times, put the next upcoming reservation first. Improve the existing
+reservation card rather than building a separate dashboard.
 
-**Direction:** Use a compact signed-in header: a modest golf-flag or fairway mark,
-Village Fairways wordmark, and a clearly labeled account control. Keep the existing
-green as the primary action color. Consider a slightly warmer off-white background.
+### Replace competing route buttons
 
-Use one excellent, permission-cleared photograph of an actual local course on the
-welcome/login screen, with a short line such as “Your next round starts here.”
-Photographs of specific courses can also help in course details. Avoid placing a
-large photographic banner above every booking form or downloading 62 full images
-for the directory. The photograph should reinforce place, not obscure text.
+Course details currently give Call, Official page, Route from saved location, and
+Route from current location similar visual emphasis. Replace the two route buttons
+with one prominent **Cart directions** action. Keep calling and the official page
+as secondary links.
 
-Suggested palette:
-
-| Role | Starting color | Application |
-| --- | --- | --- |
-| Forest | `#14532D` | Primary buttons, selected items, brand |
-| Warm ivory | `#F7F5EF` | Page background |
-| White | `#FFFFFF` | Main content surfaces |
-| Soft sage | `#E9F1EA` | Selected backgrounds and quiet highlights |
-| Charcoal green | `#16211A` | Main text |
-| Dark muted green | `#55615A` | Supporting text |
-| Brass | `#B3872F` | Small accents; avoid small brass text on white |
-
-Keep the system sans-serif for controls and body text. A restrained serif wordmark
-could add character, but typography consistency matters more than adding a new font.
-Verify all final color pairings in both light and dark modes.
-
-### 4. Organize around a resident's next action
-
-**Observed:** Travel settings, saved booking presets, and Account sit after the
-course directory. Email settings appear after tee-time search results. They are
-difficult to find and extend pages that already require substantial scrolling.
-
-**Direction:** Keep four task destinations: **Find tee times**, **My golf**,
-**Advance requests**, **Courses**. Use a compact persistent navigation bar on
-phones with text labels and icons; ensure it never covers fields or modal actions.
-Desktop can use a single navigation row. Put profile, email, and travel preferences
-under an obvious account menu. Place a saved-group picker beside golfer selection,
-where it is useful, and rename “Booking presets” to “Saved groups & preferences.”
-
-Make an upcoming-round card prominent in My golf:
+After tapping directions, show a compact starting-point row:
 
 ```text
-Your next round
-Friday, September 11 · 8:15 AM
-Silver Lake · 2 golfers
-
-[Course & cart directions]   [Add to calendar]
+Cart directions to Silver Lake
+From: Saved starting point                    Change
 ```
 
-This is an illustrative layout, not a real reservation. If travel time is available
-from the selected origin, add a clearly labeled estimated departure time that
-accounts for the arrival buffer. Show how it was calculated and allow changes.
-If there is no upcoming round, show one short invitation to find a tee time.
+Use the saved starting point when one exists, and make it visible and easy to change.
+If none exists, offer **Use current location** or **Choose on map**. Request location
+only after the resident chooses it. Allow a one-time starting point without requiring
+it to be saved. Saving a location should be an explicit choice.
 
-### 5. Make course discovery the feature residents remember
+### Keep the route screen focused
 
-**Observed:** Filtering to North of 466 leaves the map showing the wider community;
-the 14 visible markers bunch up near the top. Numbered circles overlap and do not
-explain the places without opening details. The phone map begins near the bottom
-of the initial viewport.
+Show the destination, starting point, map, mileage, and estimated cart travel time.
+Put written turns behind **Show directions**. Put provider details and network date
+under **About this route**, while retaining a short visible label such as “Cart route
+preview · estimated travel time.” Do not imply continuous spoken navigation.
 
-**Direction:** Fit the map to filtered results, provide zoom controls and “Show all,”
-cluster nearby courses, and show the selected course name. Offer a larger map view
-with the search and area controls within easy reach. Keep the list equally usable.
-Use actual landmarks and roads to build recognition, and preserve the new local
-area names. Labels such as “Near Lake Sumter Landing” should only be shown when
-the relationship is verified; matching an area search does not establish proximity.
+Keep errors and uncertainty visible. An unavailable route should provide an obvious
+way to change the starting point or try again, without presenting a failed calculation
+as a valid route.
 
-A useful course card hierarchy is:
+### Leave room for future turn-by-turn navigation
+
+Walter plans to add turn-by-turn directions later. Keep that future experience
+inside this same course-and-route flow. A resident should still reach it from
+their reservation or a course, with the destination already selected.
+
+When navigation is ready, the route preview can offer an explicit start action.
+The active screen should emphasize the next turn, remaining distance, and an easy
+way to end navigation. Keep planning controls and provider details out of that
+active screen. Do not show a start-navigation button until that behavior exists.
+Validate navigation on residents' actual phones before choosing whether any part
+needs a native companion. The current website remains the main product.
+
+## Put settings where people expect them
+
+The current Courses page continues from the course directory into travel preferences,
+booking presets, and account maintenance. Email settings appear after booking results.
+Move these controls to the places where they are relevant:
+
+| Control | Recommended location |
+| --- | --- |
+| Saved starting point and arrival preference | Account → Travel preferences |
+| Email and golfer-list maintenance | Account |
+| Saved group picker | Beside golfer selection in booking |
+| Save or manage group preferences | A secondary action beside that picker |
+| Course favorites | Courses, beside course names and in its filters |
+
+Keep optional travel settings collapsed within Account until requested. Use plain
+labels such as “Arrive before tee time” instead of “Arrival buffer.” If maximum cart
+time remains available, explain its actual effect; do not imply it filters results
+unless that behavior is implemented.
+
+A resident should be able to book or preview a route without first configuring a
+preferences page.
+
+## Make existing screens calmer
+
+### Course details
+
+Type and area currently appear several times in the course popup. Show each once.
+Replace the collection of repeated tiles with a short, readable summary:
 
 ```text
-Silver Lake                                      ☆
-Executive · 9 holes
+Silver Lake
+Executive · 9 holes · Par 29
 Silver Lake area · North of 466
+679 Rainbow Boulevard
 
-[View course]                      [Cart directions]
+[Cart directions]
+Call course       Official course page
 ```
 
-Move the full street address into details or a secondary line when space allows.
-Show route duration only when actually calculated; distinguish it from straight-line
-distance. Explain course difficulty levels in words if a reliable official meaning
-is available. Do not display a bare “Level 2” as though everyone understands it.
+This is an illustrative layout using the reviewed course data. Keep other useful
+facts available below it. Explain numbered difficulty levels if there is a reliable
+official definition; avoid making residents interpret an unexplained number.
 
-In course details, type and area currently appear in the heading, summary, and
-again in separate statistic tiles. Remove duplicates. Put a course photograph or
-location map first, followed by a compact “9 holes · Par 29” line. Make **Get cart
-directions** the primary action, with an origin selector. Keep Call, Official course
-page, and scorecard as secondary links. Use **Set starting point** with an explicit
-pin confirmation instead of relying on an undiscoverable long press.
+### Course finder
 
-### 6. Simplify booking and requests visually
+Keep course search, the local area names, favorites, and the interactive map. Keep
+the course list usable as an alternative to selecting pins. Offer **Show results on
+map** or fit newly filtered results into view so a narrow search does not leave its
+courses lost in a community-wide map. Preserve a resident's deliberate pan/zoom
+until they change the search or request a reset.
 
-**Observed:** Booking is a long chain of cards. Optional exact-time controls always
-occupy space. Search-result rows show a visible Location button but the main booking
-action depends on knowing to click the time/course area. Every result repeats a
-forecast refresh timestamp.
+Avoid overlapping pin targets. Use clustering or another clear selection method
+where needed. Provide an explicit **Choose starting point** mode with confirmation;
+a long press can remain a shortcut, but it should not be the only discoverable method.
 
-**Direction:** Group booking into **When**, **Who**, and **Preferences**, followed
-by a compact persistent summary and the search action. Keep the friendly time
-presets, with exact times behind an “Choose an exact time range” disclosure.
-Do not add a rigid multi-page wizard unless resident testing shows it helps.
+### Booking and search results
 
-Give each result a clear hierarchy: large time, prominent course name, party
-availability, then a single weather line. Add a labeled **Choose this time** action
-that opens the existing confirmation step. Keep **Course & directions** secondary.
-Show the forecast update time once above the result list, with detail on demand.
+Retain the current date, golfer, course, and time choices. Group them clearly and
+keep the saved-group picker near the golfers. Put optional exact-time fields behind
+**Choose an exact time range**. Avoid turning the form into a new multi-page wizard.
 
-For advance requests, use the same input styling and spacing as booking. Add
-visible group headings for date/group, time preferences, ranked courses, and final
-review. Replace the ambiguous “Preference: Course / Time” with “What matters most?”
-and understandable option labels. Add a final summary before submission.
+For each result, emphasize time and course, followed by availability and a short
+weather line. Add a clear **Choose this time** button that opens the existing booking
+confirmation. Keep **Course & directions** secondary. Show the forecast update time
+once for the result list rather than repeating it in every row.
 
-### 7. Make entry and feedback feel dependable
+### Advance requests
 
-Explain that the website uses the resident's existing thevillages.net account and
-golf PIN, and why those are requested. Include an accessible Show password control,
-plain help, and real button/link semantics for registration. Make the website's
-independent identity clear without implying official affiliation.
+Use the same typography, inputs, and spacing as booking. Group existing fields into
+date/group, time preferences, and ranked courses. Replace “Preference: Course / Time”
+with “What matters most?” and understandable choice labels. Keep a readable summary
+before final submission and preserve the distinction between submitted and confirmed.
 
-Use specific feedback, such as “Finding tee times for your group…” and “Your
-reservation is confirmed.” Keep the existing distinction between a confirmed
-result and an outcome that still needs verification. Visual polish must not hide
-that important information. Do not use a bright success treatment for an unknown
-booking outcome.
+## Polish the appearance without a redesign
 
-## Practical sequence for Claude or the next implementation pass
+Keep the forest green, pale backgrounds, restrained brass accent, line icons, and
+system font. Consistency and comfortable spacing will provide more immediate value
+than a new logo, font family, or photographic treatment.
 
-1. Fix stylesheet order and desktop layout; increase the core text scale.
-2. Shrink the signed-in header; establish consistent navigation and action hierarchy.
-3. Improve the course map, course cards, and details; relocate account/travel settings.
-4. Refine booking/results and advance-request grouping using the same components.
-5. Add the local photography and final brand polish.
+- Aim for 17–18px body text, 15–16px labels, and about 14px supporting text. These are
+  proposed design sizes, not WCAG minimum font requirements.
+- Use 48–52px primary controls and comfortably sized secondary targets. Keep visible
+  focus and selected-state indicators. Make important explanations readable instead
+  of fading whole sections.
+- Shorten the signed-in header so the main task appears sooner on a phone.
+- Reduce nested boxes, heavy borders, and repeated shadows. Use spacing and dividers
+  to group related information.
+- Fix the desktop stylesheet ordering that lets the embedded 480px `.wrap` rule
+  override the wider layout in `experience.css`. Give the content room to breathe;
+  keep forms at a comfortable width. A larger map beside the course list can use
+  desktop space without introducing another screen.
 
-Keep backend booking and routing behavior stable during the visual pass. Validate
-at 360–400px phone widths, tablet and desktop, keyboard-only operation, and enlarged
-text/zoom. Test the real Safari version as well as Chrome emulation. Check focus
-visibility, dialogs, sticky elements, long names, empty lists, and network failures.
+Local photography is optional polish for a later pass. It is not required to make
+this website attractive or easy to use, and should not delay these improvements.
 
-Ask a small group of residents to find a course in an unfamiliar area, find a
-morning tee time for two golfers, and locate their next round's cart directions.
-Observe where they hesitate and which terms they use. My first priorities would
-be readability, map orientation, and shorter task paths; photography comes after
-those work well.
+## Implementation order
 
-## References
+1. **Readability and layout:** fix stylesheet order, increase text size, shorten the
+   header, and make navigation consistent.
+2. **Directions flow:** one main action, visible/changeable starting point, focused
+   route preview, and direct access from each reservation.
+3. **Reduce clutter:** relocate settings, remove repeated course details, and collapse
+   optional controls.
+4. **Refine existing forms:** clear result actions and consistent request-field groups.
 
-- [W3C: Older users and web accessibility](https://www.w3.org/WAI/older-users/)
-- [W3C: Contrast minimum](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
-  — ordinary text generally needs 4.5:1; this review did not certify all current pairs.
-- [W3C: Target size enhanced](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html)
-  — 44×44 CSS pixels is the enhanced Level AAA target criterion, with exceptions;
-  it is not being presented here as the universal WCAG AA minimum.
+Implement these as presentation and interaction improvements around the existing
+backend. Preserve search-context validation, booking confirmation, account isolation,
+and handling of unknown outcomes. Do not use visual success feedback for an operation
+whose outcome is still unconfirmed.
+
+## How to judge whether it is simpler
+
+Ask a few residents to complete three tasks without coaching:
+
+1. Find a morning tee time for two golfers.
+2. Locate a course in an unfamiliar area.
+3. Open an upcoming reservation and get cart directions.
+
+Watch where they pause, scroll past an action, or need an explanation. Check that
+settings are optional, the next action is evident, and returning to a previous
+screen preserves useful choices without leaving invalid booking results selectable.
+
+Validate at phone, tablet, and desktop sizes, with enlarged text and keyboard use.
+Test Safari on an actual iPhone as well as Chrome. Check dialogs, persistent
+navigation, long course names, empty results, and route failures. These are review
+criteria for the next implementation; they have not all been verified in this pass.
+
+## Guidance for Claude
+
+Refine the existing website using this document. Keep cart directions and the four
+main destinations. Prioritize fewer competing actions, readable text, and settings
+that remain out of the way. Build no additional dashboard or top-level feature in
+this pass. Show the revised flows with synthetic booking data before release.
+
+Accessibility references consulted during the original review:
+[W3C guidance for older users](https://www.w3.org/WAI/older-users/),
+[contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html),
+and [enhanced target size](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html).
+The 44×44 CSS-pixel target recommendation is the enhanced Level AAA criterion,
+with exceptions; this document does not certify WCAG conformance.

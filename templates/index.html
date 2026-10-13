@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#14532d"/>
   <title>Village Fairways</title>
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
-  <link rel="stylesheet" href="/static/css/experience.css"/>
+  <link rel="stylesheet" href="/static/vendor/leaflet.markercluster/MarkerCluster.css"/>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -16,6 +16,8 @@
       --gl: #e9f1ea; --gb: #cfe0d4; --brass: #b3872f;
       --bg: #f3f6f1; --card: #fff; --text: #16211a; --muted: #55615a;
       --r: 16px; --shadow: 0 2px 14px rgba(20,40,28,0.09);
+      /* Text-only colors. Dark mode lightens these without touching the button greens. */
+      --ink-accent: var(--g2); --ink-strong: var(--g1); --ink-error: #c0392b;
     }
     /* Icon set: line icons in the brand green, replacing emoji. */
     .ic { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:2;
@@ -272,7 +274,7 @@
 
     #success-sec { display:none; text-align:center; padding:20px 0 10px; }
     .success-icon { font-size:56px; margin-bottom:12px; }
-    .success-title { font-size:22px; font-weight:800; color:var(--g2); margin-bottom:4px; }
+    .success-title { font-size:22px; font-weight:800; color:var(--ink-accent); margin-bottom:4px; }
     .success-sub { font-size:14px; color:var(--muted); margin-bottom:20px; }
     .conf-card { background:var(--gl); border:1px solid var(--gb); border-radius:14px;
                  padding:16px; margin-bottom:20px; text-align:left; }
@@ -295,9 +297,9 @@
     .contact-input:focus { border-color:var(--g3); }
     .contact-save-btn { background:var(--g3); color:#fff; border:none; border-radius:10px;
                         padding:10px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
-    .contact-status { font-size:12px; color:var(--g2); margin-top:6px; min-height:16px; }
+    .contact-status { font-size:12px; color:var(--ink-accent); margin-top:6px; min-height:16px; }
 
-    .mytimes-btn { display:block; width:100%; background:#eef4ee; color:var(--g1);
+    .mytimes-btn { display:block; width:100%; background:#eef4ee; color:var(--ink-strong);
                    border:2px solid #d7e6d7; border-radius:14px; padding:14px;
                    font-size:15px; font-weight:700; cursor:pointer; }
     .mytimes-btn:disabled { opacity:.6; cursor:not-allowed; }
@@ -307,7 +309,7 @@
     .mytimes-card { border:2px solid #e4eae4; border-radius:13px; padding:12px 14px; background:var(--card); }
     .mytimes-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     .mytimes-course { font-size:14px; font-weight:700; line-height:1.35; }
-    .mytimes-time { font-size:13px; color:var(--g2); font-weight:700; white-space:nowrap; }
+    .mytimes-time { font-size:13px; color:var(--ink-accent); font-weight:700; white-space:nowrap; }
     .mytimes-meta { font-size:12px; color:var(--muted); margin-top:6px; }
     .mytimes-btn-row { display:flex; gap:8px; margin-top:10px; }
     .mytimes-action-btn { border:none; border-radius:10px; padding:10px 12px; font-size:12px; font-weight:700; cursor:pointer; }
@@ -329,12 +331,12 @@
       .reg-field input,.add-buddy-row input,.contact-input { border-color:#2a422a; }
     }
     /* ── Refined direction: line icons, solid selection, brass accents ── */
-    .sec-icon .ic { width:19px; height:19px; color:var(--g2); }
+    .sec-icon .ic { width:19px; height:19px; color:var(--ink-accent); }
     .tile-ico { display:flex; align-items:center; justify-content:center; margin-bottom:6px; }
-    .tile-ico .ic { width:26px; height:26px; color:var(--g2); }
+    .tile-ico .ic { width:26px; height:26px; color:var(--ink-accent); }
     .t-ico { display:flex; align-items:center; justify-content:center; }
-    .t-ico .ic { width:23px; height:23px; color:var(--g2); }
-    .success-icon .ic { width:60px; height:60px; margin:0 auto; color:var(--g2); }
+    .t-ico .ic { width:23px; height:23px; color:var(--ink-accent); }
+    .success-icon .ic { width:60px; height:60px; margin:0 auto; color:var(--ink-accent); }
 
     /* Bold, solid selected states (was a faint tint) */
     .tile.on, .t-tile.on, .d-card.on, .g-card.on {
@@ -352,7 +354,7 @@
     .g-card.on .g-chk { background:#fff; border-color:#fff; color:var(--g2); }
 
     /* Weather glyph on date cards */
-    .d-wx-icon .ic { width:15px; height:15px; display:inline-block; vertical-align:-3px; color:var(--g2); }
+    .d-wx-icon .ic { width:15px; height:15px; display:inline-block; vertical-align:-3px; color:var(--ink-accent); }
 
     /* Brass underline on the active tab */
     .app-tab.active { box-shadow:0 4px 14px rgba(20,60,35,.22), inset 0 -3px 0 var(--brass); }
@@ -370,8 +372,8 @@
       padding:10px 14px; min-height:44px; font-size:14px; font-weight:600; color:var(--text);
       cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:100%; }
     .rq-course-chip .plus { color:var(--g3); font-weight:800; font-size:17px; line-height:1; }
-    .rq-course-chip.added { background:var(--gl); border-color:var(--g3); color:var(--g2); }
-    .rq-course-chip.added .plus { color:var(--g2); }
+    .rq-course-chip.added { background:var(--gl); border-color:var(--g3); color:var(--ink-accent); }
+    .rq-course-chip.added .plus { color:var(--ink-accent); }
     .rq-course-chip.closed { color:var(--muted); border-style:dashed; opacity:.65; cursor:default; }
     .rq-course-chip.closed .tag { font-size:11px; font-weight:700; text-transform:uppercase;
                                   letter-spacing:.4px; color:#b42318; }
@@ -383,7 +385,7 @@
     .rq-sel-name { flex:1; min-width:0; font-size:14px; font-weight:600; line-height:1.3; }
     .rq-sel-btn { width:38px; height:38px; flex:none; border:1px solid var(--gb);
       background:var(--card); border-radius:10px; font-size:17px; font-weight:700;
-      color:var(--g2); cursor:pointer; display:grid; place-items:center; }
+      color:var(--ink-accent); cursor:pointer; display:grid; place-items:center; }
     .rq-sel-btn:disabled { opacity:.3; }
     .rq-sel-btn.rm { color:#b42318; }
     .rq-sel-empty { font-size:14px; color:var(--muted); text-align:center; padding:6px 0; }
@@ -393,7 +395,7 @@
                 padding:10px 12px; margin-bottom:12px; }
     .rq-usual-lbl { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase;
                     letter-spacing:.5px; margin-bottom:6px; }
-    .rq-usual-btn { width:100%; border:1.5px solid var(--g3); background:var(--gl); color:var(--g2);
+    .rq-usual-btn { width:100%; border:1.5px solid var(--g3); background:var(--gl); color:var(--ink-accent);
                     border-radius:10px; padding:11px 12px; font-size:14px; font-weight:700;
                     cursor:pointer; text-align:left; line-height:1.45; }
     .rq-done-bar { position:sticky; bottom:10px; margin-top:14px; z-index:5; }
@@ -407,6 +409,8 @@
     .crs-chip.on { background:var(--g2); border-color:var(--g2); color:#fff; }
     .crs-chip.on .n { color:rgba(255,255,255,.75); }
   </style>
+  <!-- Experience styles intentionally load last so their responsive layout is authoritative. -->
+  <link rel="stylesheet" href="/static/css/experience.css"/>
 </head>
 <body>
 
@@ -430,10 +434,13 @@
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
 </defs></svg>
 <div class="hdr">
-  <div class="hdr-mark">VF</div>
-  <h1>Village Fairways</h1>
-  <p class="sub">Tee Time Booking</p>
-  <div class="badge" id="hdr-badge" style="display:none"></div>
+  <div class="hdr-inner">
+    <div class="hdr-brand">
+      <div class="hdr-mark" aria-hidden="true">VF</div>
+      <div class="hdr-title"><h1>Village Fairways</h1><p class="sub">Tee times and course directions</p></div>
+    </div>
+    <button type="button" class="badge account-trigger" id="hdr-badge" style="display:none" onclick="openAccountDialog()" aria-haspopup="dialog"></button>
+  </div>
 </div>
 
 <!-- ── Login Screen ── -->
@@ -443,21 +450,22 @@
       <h2>Log In</h2>
       <p class="reg-sub">Sign in with your Villages credentials.</p>
       <div class="reg-field">
-        <label>TVN Username</label>
+        <label for="login-user-input">TVN Username</label>
         <input id="login-user-input" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
       </div>
       <div class="reg-field">
-        <label>TVN Password</label>
+        <label for="login-pass-input">TVN Password</label>
         <input id="login-pass-input" type="password" autocomplete="current-password" placeholder="Your thevillages.net password"/>
       </div>
       <div class="reg-field" style="margin-bottom:0;">
-        <label>Golf PIN</label>
+        <label for="login-pin-input">Golf PIN</label>
         <input id="login-pin-input" type="password" inputmode="numeric" maxlength="10" placeholder="Golf system PIN"
                onkeydown="if(event.key==='Enter')loginUser()"/>
       </div>
+      <button type="button" class="password-toggle" data-password-toggle="login-pass-input login-pin-input" aria-pressed="false">Show passwords</button>
       <button class="pin-btn" onclick="loginUser()">Log In &#x203A;</button>
       <div class="pin-err" id="login-err"></div>
-      <div class="new-user-card" style="margin-top:14px;" onclick="showRegister()">First time? Register here</div>
+      <button type="button" class="new-user-card" style="margin-top:14px;" onclick="showRegister()">First time? Register here</button>
     </div>
   </div>
 </div>
@@ -469,19 +477,20 @@
       <h2>Create Your Login</h2>
       <p class="reg-sub">Enter your Villages credentials to connect this browser and start booking.</p>
       <div class="reg-field">
-        <label>TVN Username</label>
+        <label for="reg-user">TVN Username</label>
         <input id="reg-user" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
       </div>
       <div class="reg-field">
-        <label>TVN Password</label>
+        <label for="reg-pass">TVN Password</label>
         <input id="reg-pass" type="password" autocomplete="current-password" placeholder="Your thevillages.net password"/>
       </div>
       <div class="reg-field">
-        <label>Golf PIN</label>
+        <label for="reg-gpin">Golf PIN</label>
         <input id="reg-gpin" type="password" inputmode="numeric" maxlength="10" placeholder="Golf system PIN"/>
       </div>
+      <button type="button" class="password-toggle" data-password-toggle="reg-pass reg-gpin" aria-pressed="false">Show passwords</button>
       <div class="reg-field">
-        <label>Email for confirmations (optional)</label>
+        <label for="reg-email">Email for confirmations (optional)</label>
         <input id="reg-email" type="email" placeholder="you@example.com"/>
       </div>
       <div class="reg-btns">
@@ -503,12 +512,12 @@
 <div id="app">
 <div class="wrap">
 
-  <div class="app-nav">
-    <button class="app-tab active" id="tab-book" onclick="showAppView('book')">Book Tee Time</button>
-    <button class="app-tab" id="tab-mytimes" onclick="showAppView('mytimes')">My Tee Times</button>
-    <button class="app-tab" id="tab-request" onclick="showAppView('request')">Requests</button>
-    <button class="app-tab" id="tab-courses" onclick="showAppView('courses')">Courses</button>
-  </div>
+  <nav class="app-nav" aria-label="Main navigation">
+    <button class="app-tab active" id="tab-book" onclick="showAppView('book')"><svg class="ic" aria-hidden="true"><use href="#i-cal"/></svg><span>Book Tee Time</span></button>
+    <button class="app-tab" id="tab-mytimes" onclick="showAppView('mytimes')"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg><span>My Tee Times</span></button>
+    <button class="app-tab" id="tab-request" onclick="showAppView('request')"><svg class="ic" aria-hidden="true"><use href="#i-doc"/></svg><span>Advance Requests</span></button>
+    <button class="app-tab" id="tab-courses" onclick="showAppView('courses')"><svg class="ic" aria-hidden="true"><use href="#i-list"/></svg><span>Courses</span></button>
+  </nav>
 
   <div class="app-view active" id="view-book">
   <div class="sec" id="sec-date">
@@ -523,12 +532,20 @@
       <div><div class="sec-title">Golfers</div><div class="sec-sub">Select everyone in your group</div></div>
       <span class="lock-hint"><svg class="ic" style="width:12px;height:12px;display:inline-block;vertical-align:-2px;margin-right:2px"><use href="#i-lock"/></svg>Pick a date first</span>
     </div>
-    <div class="g-list" id="golferList"></div>
-    <div class="add-buddy-row" id="addBuddyRow">
-      <input id="buddy-id-input" type="text" inputmode="numeric" placeholder="Golfer ID"/>
-      <input id="buddy-name-input" type="text" placeholder="Name (optional)"/>
-      <button class="add-buddy-btn" onclick="addBuddy()">Add</button>
+    <div class="saved-group-picker">
+      <label class="field-label" for="preset-select">Saved group</label>
+      <select id="preset-select" class="field-input" onchange="applySelectedPreset()"><option value="">Choose a saved group</option></select>
+      <details class="preset-manager">
+        <summary>Save or manage groups</summary>
+        <div class="preset-row">
+          <input id="preset-name" class="field-input" maxlength="40" aria-label="Saved group name" placeholder="Name this group, e.g. Tuesday foursome"/>
+          <button type="button" class="secondary-btn" onclick="saveCurrentPreset()">Save current choices</button>
+        </div>
+        <button type="button" class="text-action danger-action" onclick="deleteSelectedPreset()">Delete selected group</button>
+      </details>
+      <div id="preset-status" class="contact-status" aria-live="polite"></div>
     </div>
+    <div class="g-list" id="golferList"></div>
   </div>
 
   <div class="sec dim" id="sec-course">
@@ -580,14 +597,14 @@
       <button type="button" class="t-tile" data-filter="noon – 2pm" onclick="setTime('noon &#8211; 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-cloudsun"/></svg></span><span class="t-lbl">Midday</span><span class="t-range">Noon &#8211; 2pm</span></button>
       <button type="button" class="t-tile" data-filter="after 2pm" onclick="setTime('after 2pm',this)"><span class="t-ico"><svg class="ic"><use href="#i-sunset"/></svg></span><span class="t-lbl">Afternoon</span><span class="t-range">After 2pm</span></button>
     </div>
-    <div class="exact-time-panel">
-      <div class="exact-time-heading">Optional exact window</div>
+    <details class="exact-time-panel">
+      <summary>Choose an exact time range</summary>
       <div class="time-window-fields">
         <label>From<input id="search-time-from" type="time" onchange="exactTimeChanged()"/></label>
         <label>To<input id="search-time-to" type="time" onchange="exactTimeChanged()"/></label>
       </div>
       <div class="field-help">Leave both blank to use the preference above.</div>
-    </div>
+    </details>
   </div>
 
   <div class="err-banner" id="errBanner"></div>
@@ -619,16 +636,6 @@
     <button class="again-btn" onclick="resetApp()">Book Another Time</button>
   </div>
 
-  <div class="sec" id="sec-contact">
-    <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-mail"/></svg></div>
-      <div><div class="sec-title">Email Notifications</div><div class="sec-sub">Get booking confirmations by email</div></div>
-    </div>
-    <div class="contact-row">
-      <input id="emailAddr" type="email" placeholder="you@example.com" class="contact-input"/>
-      <button class="contact-save-btn" onclick="saveEmail()">Save</button>
-    </div>
-    <div class="contact-status" id="emailStatus"></div>
-  </div>
   </div>
 
   <div class="app-view" id="view-mytimes">
@@ -636,7 +643,7 @@
     <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-doc"/></svg></div>
       <div><div class="sec-title">My Tee Times</div><div class="sec-sub">View your current reservations</div></div>
     </div>
-    <button class="mytimes-btn" id="myTimesBtn" onclick="loadMyTeeTimes()">View My Tee Times</button>
+    <button class="mytimes-btn" id="myTimesBtn" onclick="loadMyTeeTimes()">Refresh My Tee Times</button>
     <div class="mytimes-status" id="myTimesStatus"></div>
     <div class="mytimes-list" id="myTimesList"></div>
   </div>
@@ -658,131 +665,97 @@
         </select>
         <label class="favorite-filter"><input id="course-favorites-only" type="checkbox" onchange="renderCourseExplorer()"/> Favorites</label>
       </div>
-      <div class="course-map-wrap">
-        <div id="course-map" class="course-map" role="img" aria-label="Map of course locations" aria-describedby="map-help"></div>
+      <div class="course-view-switch" role="group" aria-label="Show courses as">
+        <button type="button" id="course-show-map" aria-pressed="true" onclick="setCourseLayout('map')">Map</button>
+        <button type="button" id="course-show-list" aria-pressed="false" onclick="setCourseLayout('list')">List <span id="course-list-count"></span></button>
       </div>
-      <p id="map-help" class="visually-hidden">Pinch or use the buttons to zoom, drag to move the map, and press and hold to save a starting location. Map imagery from The Villages map service.</p>
-      <p class="map-note">Pinch or use the buttons to zoom, drag to move the map, and press and hold to save a starting location. Map imagery from The Villages map service.</p>
-      <div id="course-explorer-status" class="mytimes-status" aria-live="polite"></div>
-      <div id="course-list" class="course-list"></div>
-    </div>
-
-    <div class="sec">
-      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
-        <div><div class="sec-title">My Travel Preferences</div><div class="sec-sub">Used for route estimates on this account</div></div>
+      <div id="course-explorer-status" class="mytimes-status course-explorer-status" aria-live="polite"></div>
+      <div class="course-workspace">
+        <div class="course-map-column">
+          <div class="course-map-wrap">
+            <div id="course-map" class="course-map" role="img" aria-label="Map of course locations" aria-describedby="map-help"></div>
+          </div>
+          <p id="map-help" class="visually-hidden">Pinch or use the controls to zoom, and drag to move the map. Choose starting point starts a separate, confirmable map selection.</p>
+          <p class="map-note">White circles group nearby courses: tap one to zoom in. Green pins match the numbered list.</p>
+        </div>
+        <div class="course-list-column">
+          <div id="course-list" class="course-list"></div>
+        </div>
       </div>
-      <div class="home-summary" id="home-summary">No starting location saved.</div>
-      <div class="preference-actions">
-        <button type="button" class="secondary-btn" onclick="useCurrentLocation(true)">Use my current location</button>
-        <button type="button" class="secondary-btn" id="clear-home-btn" onclick="clearSavedHome()">Clear saved location</button>
-      </div>
-      <div class="field-help">Location access is requested only when you tap the button. You can also press and hold the course map to set an approximate starting point.</div>
-      <div class="preference-grid">
-        <label class="field-label">Arrival buffer (minutes)<input id="arrival-buffer" class="field-input" type="number" min="0" max="180" step="5" onchange="savePreferenceFields()"/></label>
-        <label class="field-label">Maximum cart time (optional)<input id="max-cart-minutes" class="field-input" type="number" min="1" max="240" placeholder="No limit" onchange="savePreferenceFields()"/></label>
-      </div>
-      <div id="preferences-status" class="contact-status" aria-live="polite"></div>
-    </div>
-
-    <div class="sec">
-      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-list"/></svg></div>
-        <div><div class="sec-title">Booking Presets</div><div class="sec-sub">Save the golfers and course choices from the booking form</div></div>
-      </div>
-      <div class="preset-row">
-        <select id="preset-select" class="field-input" onchange="applySelectedPreset()"><option value="">Choose a saved preset</option></select>
-        <button type="button" class="secondary-btn" onclick="deleteSelectedPreset()">Delete</button>
-      </div>
-      <div class="preset-row">
-        <input id="preset-name" class="field-input" maxlength="40" placeholder="Preset name, e.g. Tuesday group"/>
-        <button type="button" class="secondary-btn" onclick="saveCurrentPreset()">Save current choices</button>
-      </div>
-      <div id="preset-status" class="contact-status" aria-live="polite"></div>
-    </div>
-    <div class="sec">
-      <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
-        <div><div class="sec-title">Account</div><div class="sec-sub">Keep the golfer list on this device up to date</div></div>
-      </div>
-      <button type="button" class="mytimes-btn" id="refresh-buddies-btn" onclick="refreshBuddyList()">Refresh golfer list</button>
-      <div id="refresh-buddies-status" class="contact-status" aria-live="polite"></div>
     </div>
   </div>
 
   <div class="app-view" id="view-request">
-    <div class="sec">
+    <div class="sec request-form">
       <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-doc"/></svg></div>
-        <div><div class="sec-title">New Tee Time Request</div><div class="sec-sub">Submit a request with your preferences</div></div>
+        <div><div class="sec-title">New Advance Request</div><div class="sec-sub">Tell the golf system what works for your group</div></div>
       </div>
 
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Play Date</label>
-        <input id="rq-date" type="date" onchange="requestInputsChanged()" style="width:100%;padding:10px;border:1px solid #d4d8df;border-radius:8px;font-size:15px;"/>
-      </div>
-
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Maximum Number of Golfers</label>
-        <div class="four">
-          <button type="button" class="tile" id="rq-max-1" onclick="setRequestMax(1)"><span class="tile-lbl">1</span></button>
-          <button type="button" class="tile" id="rq-max-2" onclick="setRequestMax(2)"><span class="tile-lbl">2</span></button>
-          <button type="button" class="tile" id="rq-max-3" onclick="setRequestMax(3)"><span class="tile-lbl">3</span></button>
-          <button type="button" class="tile" id="rq-max-4" onclick="setRequestMax(4)"><span class="tile-lbl">4</span></button>
+      <section class="request-group" aria-labelledby="request-date-group-heading">
+        <h3 id="request-date-group-heading">Date and group</h3>
+        <div class="field">
+          <label class="field-label" for="rq-date">Play date</label>
+          <input id="rq-date" class="field-input" type="date" onchange="requestInputsChanged()"/>
         </div>
-      </div>
-
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Type</label>
-        <div class="two">
-          <button type="button" class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><span class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></span><span class="tile-lbl">Executive</span></button>
-          <button type="button" class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><span class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></span><span class="tile-lbl">Championship</span></button>
+        <div class="field">
+          <span class="field-label">Maximum number of golfers</span>
+          <div class="four">
+            <button type="button" class="tile" id="rq-max-1" onclick="setRequestMax(1)"><span class="tile-lbl">1</span></button>
+            <button type="button" class="tile" id="rq-max-2" onclick="setRequestMax(2)"><span class="tile-lbl">2</span></button>
+            <button type="button" class="tile" id="rq-max-3" onclick="setRequestMax(3)"><span class="tile-lbl">3</span></button>
+            <button type="button" class="tile" id="rq-max-4" onclick="setRequestMax(4)"><span class="tile-lbl">4</span></button>
+          </div>
         </div>
-      </div>
-
-      <div class="tog-row" style="margin-bottom:10px;">
-        <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
-        <label class="sw"><input type="checkbox" id="rq-guests"/><span class="sw-track"></span></label>
-      </div>
-
-      <div class="tog-row" style="margin-bottom:14px;">
-        <div class="tog-lbl">Any course?<small>Open to any course of the chosen type</small></div>
-        <label class="sw"><input type="checkbox" id="rq-anycourse" onchange="requestAnyCourseChanged(this.checked)"/><span class="sw-track"></span></label>
-      </div>
-      <div class="any-course-note" id="rq-any-course-note">“Any course” lets the golf system assign a course outside your ranked choices when those choices are unavailable.</div>
-
-      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;">
-        <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preferred time to play</label>
-          <input id="rq-time" type="time" value="08:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
+        <div class="tog-row">
+          <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
+          <label class="sw"><input type="checkbox" id="rq-guests"/><span class="sw-track"></span></label>
         </div>
-        <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Earliest time OK</label>
-          <input id="rq-earliest" type="time" value="07:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
-        </div>
-        <div>
-          <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Latest time OK</label>
-          <input id="rq-latest" type="time" value="13:00" style="width:100%;padding:11px;font-size:15px;min-height:46px;border:1px solid #d4d8df;border-radius:10px;background:var(--card);color:var(--text);"/>
-        </div>
-      </div>
+      </section>
 
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Preference</label>
-        <div class="two">
-          <button type="button" class="tile on" id="rq-pref-course" onclick="setRequestPref('Course')"><span class="tile-lbl">Course</span></button>
-          <button type="button" class="tile" id="rq-pref-time" onclick="setRequestPref('Time')"><span class="tile-lbl">Time</span></button>
+      <section class="request-group" aria-labelledby="request-time-heading">
+        <h3 id="request-time-heading">Time preferences</h3>
+        <div class="request-time-grid">
+          <label class="field-label" for="rq-time">Preferred time to play<input id="rq-time" class="field-input" type="time" value="08:00"/></label>
+          <label class="field-label" for="rq-earliest">Earliest time OK<input id="rq-earliest" class="field-input" type="time" value="07:00"/></label>
+          <label class="field-label" for="rq-latest">Latest time OK<input id="rq-latest" class="field-input" type="time" value="13:00"/></label>
         </div>
-      </div>
+        <div class="field request-priority">
+          <span class="field-label">What matters most?</span>
+          <div class="two">
+            <button type="button" class="tile on" id="rq-pref-course" onclick="setRequestPref('Course')"><span class="tile-lbl">Course choices</span><span class="tile-sub">Keep my ranking</span></button>
+            <button type="button" class="tile" id="rq-pref-time" onclick="setRequestPref('Time')"><span class="tile-lbl">Tee time</span><span class="tile-sub">Stay near my preferred time</span></button>
+          </div>
+        </div>
+      </section>
 
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Course Choices (in preference order)</label>
-        <button class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()" style="margin-bottom:8px;">Load courses for selected date / type</button>
-        <div id="rq-course-status" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
+      <section class="request-group" aria-labelledby="request-courses-heading">
+        <h3 id="request-courses-heading">Ranked courses</h3>
+        <div class="field">
+          <span class="field-label">Course type</span>
+          <div class="two">
+            <button type="button" class="tile" id="rq-exec" onclick="setRequestCourse('Executive')"><span class="tile-ico"><svg class="ic"><use href="#i-flag"/></svg></span><span class="tile-lbl">Executive</span></button>
+            <button type="button" class="tile" id="rq-champ" onclick="setRequestCourse('Championship')"><span class="tile-ico"><svg class="ic"><use href="#i-trophy"/></svg></span><span class="tile-lbl">Championship</span></button>
+          </div>
+        </div>
+        <div class="tog-row request-any-course">
+          <div class="tog-lbl">Any course?<small>Allow another course of the chosen type</small></div>
+          <label class="sw"><input type="checkbox" id="rq-anycourse" onchange="requestAnyCourseChanged(this.checked)"/><span class="sw-track"></span></label>
+        </div>
+        <div class="any-course-note" id="rq-any-course-note">“Any course” lets the golf system assign a course outside your ranked choices when those choices are unavailable.</div>
+        <div class="field request-course-choices">
+          <span class="field-label">Course choices, in preference order</span>
+          <button type="button" class="add-buddy-btn" id="rq-load-courses-btn" onclick="loadRequestCourses()">Load courses for this date and type</button>
+          <div id="rq-course-status" class="request-field-status" aria-live="polite"></div>
+        </div>
         <div id="rq-course-picker" style="display:none;">
-          <div style="background:var(--gl);border:1px solid var(--gb);border-radius:12px;padding:12px;margin-bottom:14px;">
-            <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:8px;">Your course choices (in priority order)</div>
+          <div class="request-ranked-list">
+            <div class="request-picker-label">Your course choices</div>
             <div class="rq-sel-list" id="rq-selected"></div>
           </div>
           <div id="rq-browse">
             <div class="rq-usual" id="rq-usual" style="display:none;"></div>
             <input id="rq-search" class="rq-search" type="search" placeholder="Search courses&#8230;" autocomplete="off" oninput="rqSearchChanged()"/>
-            <div style="font-size:13px;font-weight:700;color:var(--muted);margin:10px 0 8px;">Tap a course to add it to your choices</div>
+            <div class="request-picker-help">Tap a course to add it to your choices</div>
             <div class="rq-avail-wrap" id="rq-available"></div>
             <div class="rq-done-bar" id="rq-done-bar" style="display:none;">
               <button type="button" onclick="rqDone()">Done: choose golfers <span id="rq-done-count"></span></button>
@@ -790,26 +763,25 @@
           </div>
           <button type="button" class="add-buddy-btn" id="rq-reopen-btn" onclick="rqReopen()" style="display:none;margin-top:4px;">Change courses</button>
         </div>
-      </div>
-
+      </section>
     </div>
 
     <!-- Card 3: Golfers & submit -->
     <div class="sec" id="rq-golfers-sec" style="margin-top:14px;">
       <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-person"/></svg></div>
-        <div><div class="sec-title">Golfers</div><div class="sec-sub">Up to 4 players in this request</div></div>
+        <div><div class="sec-title">Choose golfers</div><div class="sec-sub">Select the people included in this advance request</div></div>
       </div>
       <div class="g-list" id="rq-golfer-list"></div>
 
       <div class="err-banner" id="rq-err" style="margin-top:14px;"></div>
-      <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()" style="margin-top:14px;">Submit Request</button>
-      <div style="font-size:13px;color:var(--g2);margin-top:8px;text-align:center;line-height:1.4;">We'll email you after the nightly assignment (around 1 AM, 3 days before play) to tell you whether your request came through, so you don't have to keep checking.</div>
+      <button class="fetch-btn" id="rq-submit-btn" onclick="submitRequest()" style="margin-top:14px;">Review Advance Request</button>
+      <div class="request-email-note" id="rq-email-note">We'll email you after the nightly assignment (around 1 AM, 3 days before play) to tell you whether the request was assigned. A submitted request is not a confirmed tee time.</div>
       <div class="contact-status" id="rq-status" style="margin-top:10px;"></div>
     </div>
 
     <div class="sec" style="margin-top:18px;">
       <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-list"/></svg></div>
-        <div><div class="sec-title">My Open Requests</div><div class="sec-sub">Pending tee-time requests</div></div>
+        <div><div class="sec-title">My Open Advance Requests</div><div class="sec-sub">Submitted requests awaiting an assignment</div></div>
       </div>
       <button class="mytimes-btn" onclick="loadMyRequests()">Refresh My Requests</button>
       <div class="mytimes-status" id="rq-list-status"></div>
@@ -817,9 +789,62 @@
     </div>
   </div>
 
-  <button type="button" class="switch-user switch-user-btn" onclick="switchUser()">Log out of this device</button>
-
 </div>
+</div>
+
+<!-- Account settings stay available from the signed-in header without interrupting booking state. -->
+<div class="overlay centered-overlay account-overlay" id="account-overlay" onclick="if(event.target===this)closeAccountDialog()">
+  <section class="account-dialog" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title" tabindex="-1">
+    <button type="button" class="modal-close" onclick="closeAccountDialog()" aria-label="Close account settings">&#10005;</button>
+    <div class="account-dialog-heading">
+      <div class="detail-kicker">Village Fairways</div>
+      <h2 id="account-dialog-title">Account</h2>
+      <p>Email, golfers, and optional travel preferences.</p>
+    </div>
+
+    <section class="account-section" aria-labelledby="account-email-heading">
+      <h3 id="account-email-heading">Email notifications</h3>
+      <p>Receive booking confirmations and advance-request results.</p>
+      <div class="contact-row">
+        <input id="emailAddr" type="email" autocomplete="email" aria-label="Notification email" placeholder="you@example.com" class="contact-input"/>
+        <button type="button" class="contact-save-btn" onclick="saveEmail()">Save</button>
+      </div>
+      <div class="contact-status" id="emailStatus" aria-live="polite"></div>
+    </section>
+
+    <section class="account-section" aria-labelledby="account-golfers-heading">
+      <h3 id="account-golfers-heading">Golfer list</h3>
+      <p>Refresh your Villages buddy list or add a golfer by ID.</p>
+      <button type="button" class="secondary-btn full-width-btn" id="refresh-buddies-btn" onclick="refreshBuddyList()">Refresh golfer list</button>
+      <div id="refresh-buddies-status" class="contact-status" aria-live="polite"></div>
+      <div class="add-buddy-row" id="addBuddyRow">
+        <input id="buddy-id-input" type="text" inputmode="numeric" aria-label="Golfer ID" placeholder="Golfer ID"/>
+        <input id="buddy-name-input" type="text" aria-label="Golfer name, optional" placeholder="Name (optional)"/>
+        <button type="button" class="add-buddy-btn" onclick="addBuddy()">Add golfer</button>
+      </div>
+    </section>
+
+    <details class="account-section travel-preferences">
+      <summary>Travel preferences <span>Optional</span></summary>
+      <div class="details-body">
+        <div class="home-summary" id="home-summary">No starting location saved.</div>
+        <div class="preference-actions">
+          <button type="button" class="secondary-btn" onclick="useCurrentLocation(true)">Use current location</button>
+          <button type="button" class="secondary-btn" onclick="closeAccountDialog();startHomeSelection()">Choose on map</button>
+          <button type="button" class="text-action danger-action" id="clear-home-btn" onclick="clearSavedHome()">Clear saved location</button>
+        </div>
+        <p class="field-help">Location access is requested only after you choose “Use current location.” A map choice is saved only after you confirm it.</p>
+        <div class="preference-grid">
+          <label class="field-label" for="arrival-buffer">Arrive before tee time (minutes)<input id="arrival-buffer" class="field-input" type="number" min="0" max="120" step="5" onchange="savePreferenceFields()"/></label>
+          <label class="field-label" for="max-cart-minutes">Preferred maximum cart time (minutes)<input id="max-cart-minutes" class="field-input" type="number" min="1" max="180" placeholder="No preference" onchange="savePreferenceFields()"/></label>
+        </div>
+        <p class="field-help">The maximum is a planning preference for route comparisons. It does not filter tee-time results.</p>
+        <div id="preferences-status" class="contact-status" aria-live="polite"></div>
+      </div>
+    </details>
+
+    <button type="button" class="switch-user switch-user-btn" onclick="closeAccountDialog();switchUser()">Log out of this device</button>
+  </section>
 </div>
 
 <!-- ── Confirm overlay ── -->
@@ -974,7 +999,8 @@ async function registerUser(){
 // ── Header ──
 function updateHeader(name, primary){
   const badge=document.getElementById('hdr-badge');
-  badge.innerHTML=`<svg class="ic"><use href="#i-person"/></svg> ${esc(name)}`;
+  badge.innerHTML=`<svg class="ic" aria-hidden="true"><use href="#i-person"/></svg><span class="account-trigger-text"><span class="account-name">${esc(name)}</span><small>Account</small></span>`;
+  badge.setAttribute('aria-label',`Open account settings for ${name}`);
   badge.style.display='inline-flex';
 }
 
@@ -1017,7 +1043,7 @@ function setMyTimesStatus(message, tone='muted'){
   const status=document.getElementById('myTimesStatus');
   if(!status) return;
   status.textContent=message||'';
-  status.style.color = tone==='success' ? 'var(--g2)' : tone==='error' ? '#c0392b' : 'var(--muted)';
+  status.style.color = tone==='success' ? 'var(--ink-accent)' : tone==='error' ? 'var(--ink-error)' : 'var(--muted)';
 }
 
 function closeDeleteConfirm(){
@@ -1364,11 +1390,11 @@ async function saveEmail(){
     if(d.ok){
       S.email=d.email||'';
       status.textContent=S.email?'Saved! Email confirmations enabled':'Email confirmations disabled';
-      status.style.color='var(--g2)';
+      status.style.color='var(--ink-accent)';
     } else {
-      status.textContent=d.error||'Save failed'; status.style.color='#c0392b';
+      status.textContent=d.error||'Save failed'; status.style.color='var(--ink-error)';
     }
-  }catch(e){ status.textContent='Connection error'; status.style.color='#c0392b'; }
+  }catch(e){ status.textContent='Connection error'; status.style.color='var(--ink-error)'; }
 }
 
 function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth'});}else{b.textContent='';b.classList.remove('show');} }
@@ -1446,8 +1472,8 @@ async function loadRequestCourses(){
   const status=document.getElementById('rq-course-status');
   const picker=document.getElementById('rq-course-picker');
   const play_date=rqFormatDateForApi();
-  if(!play_date){ status.textContent='Pick a date first.'; status.style.color='#c0392b'; return; }
-  if(!SR.course){ status.textContent='Pick a course type first.'; status.style.color='#c0392b'; return; }
+  if(!play_date){ status.textContent='Pick a date first.'; status.style.color='var(--ink-error)'; return; }
+  if(!SR.course){ status.textContent='Pick a course type first.'; status.style.color='var(--ink-error)'; return; }
   status.textContent='Loading courses…'; status.style.color='var(--muted)';
   try{
     const r=await fetch('/api/request-courses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({play_date,course_type:SR.course,any_course:SR.anyCourse})});
@@ -1464,11 +1490,11 @@ async function loadRequestCourses(){
       picker.style.display='block';
       const nClosed=SR.closedCourses.length;
       status.textContent=`Loaded ${SR.availableCourses.length} open courses`+(nClosed?` (${nClosed} closed for this date)`:'')+'.';
-      status.style.color='var(--g2)';
+      status.style.color='var(--ink-accent)';
     } else {
-      status.textContent=d.error||'Could not load courses.'; status.style.color='#c0392b';
+      status.textContent=d.error||'Could not load courses.'; status.style.color='var(--ink-error)';
     }
-  } catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+  } catch(e){ status.textContent='Connection error.'; status.style.color='var(--ink-error)'; }
 }
 function rqRecentsKey(){ return 'vf_usual_courses_'+(SR.course||''); }
 function rqGetRecents(){
@@ -1591,12 +1617,12 @@ async function submitRequest(){
     if(d.success){
       rqSaveRecents();
       status.textContent='✅ '+(d.message||('Request #'+(d.request_no||'submitted')));
-      status.style.color='var(--g2)';
+      status.style.color='var(--ink-accent)';
       loadMyRequests();
     } else {
-      status.textContent=d.error||'Submission failed.'; status.style.color='#c0392b';
+      status.textContent=d.error||'Submission failed.'; status.style.color='var(--ink-error)';
     }
-  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='var(--ink-error)'; }
   finally{ btn.disabled=false; }
 }
 async function loadMyRequests(){
@@ -1624,9 +1650,9 @@ async function loadMyRequests(){
       }).join('');
       status.textContent='';
     } else {
-      status.textContent=d.error||'Could not load.'; status.style.color='#c0392b';
+      status.textContent=d.error||'Could not load.'; status.style.color='var(--ink-error)';
     }
-  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='var(--ink-error)'; }
 }
 async function deleteRequest(rid){
   if(!confirm(`Cancel request #${rid}?`)) return;
@@ -1635,12 +1661,14 @@ async function deleteRequest(rid){
   try{
     const r=await fetch('/api/delete-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:rid})});
     const d=await r.json();
-    if(d.success){ status.textContent='Cancelled.'; status.style.color='var(--g2)'; loadMyRequests(); }
-    else { status.textContent=d.error||'Cancel failed.'; status.style.color='#c0392b'; }
-  }catch(e){ status.textContent='Connection error.'; status.style.color='#c0392b'; }
+    if(d.success){ status.textContent='Cancelled.'; status.style.color='var(--ink-accent)'; loadMyRequests(); }
+    else { status.textContent=d.error||'Cancel failed.'; status.style.color='var(--ink-error)'; }
+  }catch(e){ status.textContent='Connection error.'; status.style.color='var(--ink-error)'; }
 }
 </script>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
 <script src="/static/js/experience.js"></script>
+<script src="/static/js/interface.js"></script>
 </body>
 </html>

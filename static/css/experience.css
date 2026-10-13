@@ -41,17 +41,17 @@
 .course-modal { position:relative; width:min(100%,600px); max-height:92vh; overflow:auto; background:var(--card); border-radius:18px; padding:22px 18px; box-shadow:0 18px 50px rgba(0,0,0,.3); outline:none; }
 .modal-close { position:absolute; right:12px; top:12px; width:44px; height:44px; z-index:2; border:1px solid var(--gb); border-radius:50%; background:var(--card); color:var(--text); cursor:pointer; }
 .course-modal h2 { padding-right:48px; font-size:21px; line-height:1.2; }
-.detail-kicker { color:var(--g2); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+.detail-kicker { color:var(--ink-accent); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
 .detail-address { color:var(--muted); font-size:13px; line-height:1.5; margin-top:8px; }
 .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:15px 0; }
 .detail-item { background:var(--gl); border-radius:10px; padding:10px; }
 .detail-item dt { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.4px; }
 .detail-item dd { font-size:13px; font-weight:700; margin-top:3px; }
 .detail-actions,.preference-actions,.preset-row,.location-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-.secondary-btn,.location-btn,.detail-link { min-height:42px; border:1.5px solid var(--g3); border-radius:10px; padding:10px 12px; background:var(--card); color:var(--g2); font-size:13px; font-weight:750; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.secondary-btn,.location-btn,.detail-link { min-height:42px; border:1.5px solid var(--g3); border-radius:10px; padding:10px 12px; background:var(--card); color:var(--ink-accent); font-size:13px; font-weight:750; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
 .route-panel { margin-top:15px; }
 .route-summary { background:var(--gl); border:1px solid var(--gb); border-radius:12px; padding:12px; }
-.route-headline { font-weight:800; font-size:17px; color:var(--g2); }
+.route-headline { font-weight:800; font-size:17px; color:var(--ink-accent); }
 .route-meta { color:var(--muted); font-size:11px; line-height:1.4; margin-top:4px; }
 .route-map { width:100%; aspect-ratio:1.8; margin-top:10px; border:1px solid var(--gb); border-radius:10px; overflow:hidden; background:#edf4e9; }
 .route-map.leaflet-container { background:#edf4e9; }
@@ -88,4 +88,347 @@
   .favorite-btn.on { color:#f0c86a; background:#493b16; border-color:#8e7331; }
   .any-course-note { background:#3d3212; border-color:#725f25; color:#f1dda1; }
   .calendar-btn { background:#152b3d; color:#a9d2f5; border-color:#315c7d; }
+}
+
+/* September 2026 experience refinement: a calmer, app-like shell. */
+:root {
+  --g1:#103d25;
+  --g2:#185b35;
+  --g3:#2f7450;
+  --gl:#edf4ec;
+  --gb:#cfddcf;
+  --brass:#b58b36;
+  --bg:#f5f2e9;
+  --card:#fffef9;
+  --text:#19231c;
+  --muted:#526057;
+  --shadow:0 4px 18px rgba(27,51,34,.07);
+}
+
+html { scroll-behavior:smooth; }
+body {
+  font-size:17px;
+  line-height:1.5;
+  padding-bottom:calc(86px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 85% -10%,rgba(181,139,54,.12),transparent 28rem),
+    var(--bg);
+}
+button,input,select,summary { font:inherit; }
+button,summary { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible {
+  outline:3px solid #d4a94f;
+  outline-offset:3px;
+}
+
+.hdr { padding:10px 14px; text-align:left; box-shadow:0 3px 16px rgba(7,35,19,.18); }
+.hdr-inner { width:min(100%,1180px); min-height:48px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.hdr-brand { min-width:0; display:flex; align-items:center; gap:10px; }
+.hdr-mark { width:38px; height:38px; margin:0; border-radius:11px; font-size:15px; box-shadow:inset 0 0 0 1px rgba(14,61,33,.08); }
+.hdr-title { min-width:0; }
+.hdr h1 { font-size:19px; line-height:1.15; letter-spacing:-.25px; }
+.hdr .sub { margin-top:1px; font-size:12px; line-height:1.25; }
+.hdr .badge { margin:0; min-height:44px; max-width:52%; padding:8px 12px; border:1px solid rgba(255,255,255,.25); color:#fff; cursor:pointer; text-align:left; line-height:1.15; }
+.hdr .badge .ic { width:18px; height:18px; flex:none; }
+
+.wrap { max-width:680px; padding:18px 14px; }
+.sec {
+  padding:20px;
+  margin-bottom:16px;
+  border:1px solid rgba(24,91,53,.09);
+  border-radius:18px;
+  box-shadow:var(--shadow);
+}
+.sec-hdr { margin-bottom:18px; align-items:flex-start; }
+.sec-title { font-size:19px; line-height:1.25; font-weight:800; letter-spacing:-.15px; }
+.sec-sub { margin-top:3px; font-size:14px; line-height:1.4; }
+.sec-icon { width:36px; height:36px; flex:none; border-radius:11px; }
+.sec.dim { opacity:.82; }
+.sec.dim .sec-hdr .lock-hint { display:inline-flex; align-items:center; }
+.sec-hdr .lock-hint { font-size:12px; line-height:1.2; padding:5px 9px; }
+.sec.dim button:disabled,.sec.dim input:disabled,.sec.dim select:disabled { opacity:.8; color:inherit; }
+
+.field { margin-bottom:18px; }
+.field-label,.reg-field label { font-size:15px; line-height:1.35; letter-spacing:0; text-transform:none; color:var(--text); }
+.field-input,.reg-field input,.contact-input,.add-buddy-row input,.rq-search {
+  min-height:48px;
+  padding:11px 13px;
+  border:1.5px solid #b9c9bb;
+  border-radius:11px;
+  font-size:17px;
+}
+.field-input:focus,.reg-field input:focus,.contact-input:focus,.add-buddy-row input:focus,.rq-search:focus { border-color:var(--g3); }
+.field-help,.map-note,.route-meta,.route-turn-distance,.weather-updated { font-size:14px; line-height:1.5; }
+.contact-status,.mytimes-status,.course-card-meta,.detail-address,.area-description,.mytimes-meta { font-size:14px; line-height:1.45; }
+.tile-lbl,.t-lbl,.g-name,.tog-lbl { font-size:16px; }
+.tile-sub,.t-range,.g-id,.tog-lbl small { font-size:14px; line-height:1.35; }
+.tile,.t-tile,.d-card,.g-card { border-width:1.5px; }
+.tile,.t-tile { min-height:52px; }
+.g-card { min-height:56px; padding:10px 13px; }
+.d-dow,.d-mon,.d-wx { font-size:13px; }
+.d-wx-temp { font-size:14px; }
+
+.app-nav {
+  position:fixed;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:60;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:0;
+  margin:0;
+  padding:6px max(6px,env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(6px,env(safe-area-inset-left));
+  background:rgba(255,254,249,.96);
+  border-top:1px solid var(--gb);
+  box-shadow:0 -6px 22px rgba(22,47,30,.11);
+  backdrop-filter:blur(14px);
+}
+.app-tab {
+  min-width:0;
+  min-height:62px;
+  padding:6px 3px;
+  border-radius:11px;
+  background:transparent;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.15;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:4px;
+}
+.app-tab .ic { width:21px; height:21px; }
+.app-tab span { max-width:100%; white-space:normal; }
+.app-tab.active { background:var(--gl); color:var(--ink-strong); box-shadow:inset 0 -3px 0 var(--brass); }
+
+.pin-card,.reg-card { border:1px solid rgba(24,91,53,.1); box-shadow:var(--shadow); }
+.reg-card h2 { font-size:22px; }
+.reg-card .reg-sub,.pin-card p { font-size:15px; line-height:1.45; }
+.pin-btn,.reg-submit,.reg-cancel,.new-user-card { min-height:50px; }
+.new-user-card { display:block; width:100%; background:transparent; }
+.password-toggle { display:block; margin:7px 0 2px auto; min-height:44px; padding:6px 4px; border:0; background:transparent; color:var(--ink-accent); font-size:14px; font-weight:750; cursor:pointer; }
+
+.saved-group-picker { margin:0 0 18px; padding-bottom:18px; border-bottom:1px solid var(--gb); }
+.saved-group-picker > .field-label { margin-bottom:7px; }
+.preset-manager { margin-top:8px; }
+.preset-manager > summary,.exact-time-panel > summary,.travel-preferences > summary,.route-details > summary {
+  min-height:44px;
+  padding:9px 2px;
+  color:var(--ink-accent);
+  font-size:15px;
+  font-weight:800;
+  cursor:pointer;
+}
+.preset-manager[open] > summary,.exact-time-panel[open] > summary,.travel-preferences[open] > summary { margin-bottom:8px; }
+.preset-row { align-items:stretch; }
+.preset-row .secondary-btn { flex:0 0 auto; }
+.text-action { min-height:44px; border:0; padding:8px 2px; background:transparent; color:var(--ink-accent); font-size:15px; font-weight:750; text-decoration:underline; cursor:pointer; }
+.danger-action { color:#a52a20; }
+
+.exact-time-panel { margin-top:16px; padding:3px 13px; border:1px solid var(--gb); border-radius:12px; background:#fafaf5; }
+.exact-time-panel[open] { padding-bottom:13px; }
+.time-window-fields { margin-top:4px; }
+.time-window-fields label { font-size:15px; color:var(--text); }
+.time-window-fields input { font-size:17px; }
+
+.fetch-btn,.mytimes-btn,.add-buddy-btn,.contact-save-btn,.secondary-btn,.location-btn,.detail-link,.mytimes-action-btn {
+  min-height:48px;
+  font-size:15px;
+}
+.fetch-btn { font-size:17px; }
+.full-width-btn { width:100%; }
+.time-row { padding:14px; }
+.tr-time { font-size:21px; }
+.tr-course,.tr-avail { font-size:14px; }
+
+.course-filter-row { grid-template-columns:1fr; gap:9px; margin:12px 0 16px; }
+.course-filter-row .field-input { padding:11px 13px; font-size:16px; }
+.favorite-filter { grid-column:auto; min-height:48px; font-size:16px; }
+.course-map { min-height:290px; }
+.course-list { margin-top:0; }
+.course-card { padding:14px; border-width:1px; box-shadow:0 2px 10px rgba(27,51,34,.045); }
+.course-card-name { font-size:17px; }
+.favorite-btn { flex-basis:48px; width:48px; height:48px; }
+.map-pin { width:32px; height:32px; }
+.map-pin::before { content:""; position:absolute; inset:-8px; border-radius:50%; }
+
+.account-overlay { z-index:140; padding:10px; }
+.account-dialog {
+  position:relative;
+  width:min(100%,620px);
+  max-height:calc(100vh - 20px);
+  overflow:auto;
+  padding:24px 20px calc(22px + env(safe-area-inset-bottom));
+  border-radius:20px;
+  background:var(--card);
+  box-shadow:0 20px 60px rgba(0,0,0,.32);
+  outline:none;
+}
+.account-dialog-heading { padding:0 52px 18px 0; }
+.account-dialog-heading h2 { font-size:25px; line-height:1.2; }
+.account-dialog-heading p,.account-section > p { margin-top:4px; color:var(--muted); font-size:14px; line-height:1.45; }
+.account-section { padding:18px 0; border-top:1px solid var(--gb); }
+.account-section h3 { font-size:18px; line-height:1.3; }
+.account-section .contact-row,.account-section .full-width-btn { margin-top:12px; }
+.travel-preferences > summary { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--text); font-size:18px; list-style-position:inside; }
+.travel-preferences > summary span { padding:3px 8px; border-radius:999px; background:var(--gl); color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+.details-body { padding-top:8px; }
+.home-summary { font-size:15px; }
+.preference-grid { grid-template-columns:1fr; }
+.preference-grid .field-input { display:block; margin-top:7px; }
+.switch-user-btn { width:100%; min-height:48px; margin-top:4px; border:1px solid #e3bab5; border-radius:11px; background:#fff8f7; color:#982b22; font-size:15px; font-weight:750; }
+
+.request-form > .sec-hdr { margin-bottom:6px; }
+.request-group { padding:22px 0; border-top:1px solid var(--gb); }
+.request-group:first-of-type { border-top:0; }
+.request-group h3 { margin-bottom:16px; color:var(--ink-strong); font-size:18px; letter-spacing:-.1px; }
+.request-group .field:last-child { margin-bottom:0; }
+.request-time-grid { display:grid; grid-template-columns:1fr; gap:13px; }
+.request-time-grid .field-label { margin:0; }
+.request-time-grid .field-input { display:block; margin-top:7px; }
+.request-priority { margin-top:20px; }
+.request-priority .tile { display:flex; flex-direction:column; justify-content:center; }
+.request-any-course { margin:4px 0 14px; }
+.request-course-choices { margin-top:18px; }
+.request-course-choices .add-buddy-btn { width:100%; white-space:normal; }
+.request-field-status { min-height:20px; margin-top:8px; color:var(--muted); font-size:14px; }
+.request-ranked-list { margin-bottom:16px; padding:14px; border-radius:12px; background:var(--gl); }
+.request-picker-label { margin-bottom:9px; color:var(--ink-accent); font-size:15px; font-weight:800; }
+.request-picker-help { margin:12px 0 9px; color:var(--muted); font-size:14px; font-weight:700; }
+.request-email-note { margin-top:12px; color:var(--ink-accent); font-size:14px; line-height:1.5; text-align:center; }
+.any-course-note { font-size:14px; }
+
+/* Hooks shared with the simplified directions and review renderer. */
+.cart-directions-btn,.map-choice-confirm {
+  width:100%; min-height:50px; border:0; border-radius:12px; padding:12px 16px;
+  background:linear-gradient(135deg,var(--g1),var(--g3)); color:#fff;
+  font-size:16px; font-weight:800; cursor:pointer; box-shadow:0 4px 13px rgba(16,61,37,.2);
+}
+.route-origin-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; padding:12px 0; border-block:1px solid var(--gb); }
+.route-origin-row > :first-child { flex:1; min-width:0; }
+.route-origin-actions,.map-choice-actions,.request-review-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.route-review,.request-review { margin-top:14px; padding:15px; border:1px solid var(--gb); border-radius:13px; background:#fafaf5; }
+.route-details { margin-top:10px; border-top:1px solid var(--gb); }
+.route-details[open] { padding-bottom:4px; }
+.map-choice-actions > button,.route-origin-actions > button,.request-review-actions > button { flex:1 1 145px; }
+.weather-list-updated { margin:0 0 10px; color:var(--muted); font-size:14px; }
+.course-map-results-action { width:100%; min-height:46px; margin:8px 0 2px; border:1.5px solid var(--g3); border-radius:10px; background:var(--card); color:var(--ink-accent); font-size:15px; font-weight:800; cursor:pointer; }
+
+@media (min-width:560px) {
+  .course-filter-row { grid-template-columns:1fr 1fr; }
+  .favorite-filter { grid-column:1 / -1; }
+  .request-time-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .preference-grid { grid-template-columns:1fr 1fr; }
+}
+
+@media (min-width:760px) {
+  body { padding-bottom:44px; }
+  .hdr { padding:12px 22px; }
+  .wrap { max-width:1180px; padding:24px 24px 42px; }
+  .app-nav {
+    position:sticky;
+    top:0;
+    z-index:45;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:8px;
+    margin:0 0 22px;
+    padding:8px;
+    border:1px solid var(--gb);
+    border-radius:15px;
+    box-shadow:0 5px 20px rgba(22,47,30,.08);
+  }
+  .app-tab { min-height:48px; padding:10px 14px; flex-direction:row; gap:8px; font-size:15px; }
+  #view-book,#view-mytimes,#view-request { max-width:760px; margin:0 auto; }
+  .course-filter-row { grid-template-columns:1fr 1fr auto; }
+  .favorite-filter { grid-column:auto; }
+  .course-workspace { display:grid; grid-template-columns:minmax(0,1.48fr) minmax(300px,.82fr); gap:20px; align-items:start; }
+  .course-map { min-height:540px; aspect-ratio:auto; }
+  .course-list-column { max-height:590px; overflow:auto; padding:0 5px 8px 0; }
+  .course-list { display:flex; flex-direction:column; }
+  .account-dialog { padding:28px 26px; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  html { scroll-behavior:auto; }
+  *,*::before,*::after { scroll-behavior:auto !important; transition-duration:.01ms !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; }
+}
+
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#10150f; --card:#1a2018; --text:#edf2ea; --muted:#aeb8ae; --gl:#202d21; --gb:#344536; }
+  body { background:var(--bg); }
+  .app-nav { background:rgba(26,32,24,.96); }
+  .exact-time-panel,.route-review,.request-review { background:#171d16; }
+  .switch-user-btn { background:#2a1817; border-color:#6d3732; color:#f3aaa3; }
+}
+
+/* October 2026 review fixes: dark-mode text, phone bars, map clusters, result cards. */
+[hidden] { display:none !important; }
+
+/* Header account button: the name above a small "Account" label. */
+.account-trigger-text { display:flex; flex-direction:column; min-width:0; }
+.account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:800; }
+.account-trigger small { font-size:12px; font-weight:600; opacity:.85; }
+
+/* A flex summary drops the native arrow, so draw one. */
+.travel-preferences > summary { justify-content:flex-start; list-style:none; }
+.travel-preferences > summary::-webkit-details-marker { display:none; }
+.travel-preferences > summary::before { content:"\25B8"; margin-right:8px; color:var(--ink-accent); }
+.travel-preferences[open] > summary::before { content:"\25BE"; }
+.travel-preferences > summary span { margin-left:auto; }
+
+.saved-group-picker #preset-status { margin-top:4px; }
+
+/* Tee time results: the whole card chooses the time. */
+.time-row { display:block; padding:0; overflow:hidden; }
+.time-row-main { display:block; width:100%; padding:14px 16px 10px; }
+.time-row-main > span { display:block; }
+.time-row-main > .tr-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.time-row .tr-time { font-size:22px; font-weight:800; }
+.time-row .tr-course { margin-top:2px; color:var(--muted); font-size:15px; }
+.time-row .weather-detail { margin:8px 0 0; font-size:14px; }
+.tr-choose { margin-top:10px; color:var(--ink-accent); font-size:15px; font-weight:800; }
+.time-row-actions { flex-direction:row; justify-content:flex-start; padding:0 16px 10px; }
+.time-row .location-btn { min-height:44px; padding:6px 2px; border:0; background:transparent; color:var(--ink-accent); font-size:14px; text-decoration:underline; }
+
+/* My Tee Times: directions first and full width; delete last. */
+.mytimes-btn-row { flex-wrap:wrap; }
+.mytimes-btn-row > .cart-directions-btn { flex:1 1 100%; }
+.mytimes-btn-row > .mytimes-action-btn:not(.cart-directions-btn) { flex:1 1 40%; }
+
+.email-nudge { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:2px 10px; margin-top:10px; padding:10px 12px; border-radius:10px; background:var(--gl); color:var(--text); font-size:14px; line-height:1.4; text-align:center; }
+.email-nudge .text-action { min-height:40px; }
+
+/* Course map: numbered pins, ringed cluster bubbles, location button and dot. */
+.map-pin { width:32px; height:32px; font-size:13px; }
+.map-pin-cluster { display:grid; place-items:center; border:3px solid var(--g2); border-radius:50%; background:#fff; color:var(--g1); font-size:15px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,.3); cursor:pointer; }
+.map-pin-cluster.favorite { border-color:var(--brass); }
+.map-locate-btn { padding:0 10px; font-size:13px; }
+.my-location-dot { border:3px solid #fff; border-radius:50%; background:#1a73e8; box-shadow:0 0 0 2px rgba(26,115,232,.35),0 1px 4px rgba(0,0,0,.4); }
+
+.course-view-switch { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:0 0 10px; padding:4px; border:1px solid var(--gb); border-radius:13px; background:var(--gl); }
+.course-view-switch button { min-height:44px; border:0; border-radius:10px; background:transparent; color:var(--muted); font-size:16px; font-weight:800; cursor:pointer; }
+.course-view-switch button[aria-pressed="true"] { background:var(--card); color:var(--ink-strong); box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.course-explorer-status { margin:0 0 8px; }
+
+@media (max-width:759px) {
+  /* Keep the sticky "Done: choose golfers" bar above the fixed bottom tabs. */
+  .rq-done-bar { bottom:calc(88px + env(safe-area-inset-bottom)); }
+  .course-filter-row { grid-template-columns:1fr 1fr; }
+  .favorite-filter { grid-column:1 / -1; }
+  .courses-show-list .course-map-column { display:none; }
+  .courses-show-map .course-list-column { display:none; }
+  .courses-show-map .course-map { height:58vh; min-height:340px; aspect-ratio:auto; }
+}
+@media (min-width:760px) {
+  .course-view-switch { display:none; }
+}
+
+@media (prefers-color-scheme:dark) {
+  /* Button greens go back to the original dark-mode values; text gets light greens. */
+  :root { --g2:#2f6b45; --g3:#5a9a72; --brass:#d0a659; --ink-accent:#93d3a8; --ink-strong:#d6eedd; --ink-error:#ff9a8f; }
+  .mytimes-btn { background:var(--gl); border-color:var(--gb); }
+  .danger-action,.rq-sel-btn.rm,.rq-course-chip.closed .tag { color:#ff9a8f; }
+  .map-pin-cluster { background:#1a2018; color:#d6eedd; border-color:#5a9a72; }
+  .course-view-switch button[aria-pressed="true"] { background:#2a3a2c; }
 }
