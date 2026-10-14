@@ -37,8 +37,8 @@
 .favorite-btn { flex:none; width:44px; height:44px; border:1px solid var(--gb); border-radius:50%; background:var(--card); color:var(--muted); font-size:22px; cursor:pointer; }
 .favorite-btn.on { color:#8a641b; background:#fff6d8; border-color:#d9bb6a; }
 .area-description { font-size:12px; color:var(--muted); line-height:1.45; margin-top:8px; }
-.centered-overlay { align-items:center; padding:12px; }
-.course-modal { position:relative; width:min(100%,600px); max-height:92vh; overflow:auto; background:var(--card); border-radius:18px; padding:22px 18px; box-shadow:0 18px 50px rgba(0,0,0,.3); outline:none; }
+.centered-overlay { align-items:center; padding:calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+.course-modal { position:relative; width:min(100%,600px); max-height:calc(92vh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow:auto; background:var(--card); border-radius:18px; padding:22px 18px; box-shadow:0 18px 50px rgba(0,0,0,.3); outline:none; }
 .modal-close { position:absolute; right:12px; top:12px; width:44px; height:44px; z-index:2; border:1px solid var(--gb); border-radius:50%; background:var(--card); color:var(--text); cursor:pointer; }
 .course-modal h2 { padding-right:48px; font-size:21px; line-height:1.2; }
 .detail-kicker { color:var(--ink-accent); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
@@ -121,7 +121,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
   outline-offset:3px;
 }
 
-.hdr { padding:10px 14px; text-align:left; box-shadow:0 3px 16px rgba(7,35,19,.18); }
+.hdr { padding:calc(10px + env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left)); text-align:left; box-shadow:0 3px 16px rgba(7,35,19,.18); }
 .hdr-inner { width:min(100%,1180px); min-height:48px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .hdr-brand { min-width:0; display:flex; align-items:center; gap:10px; }
 .hdr-mark { width:38px; height:38px; margin:0; border-radius:11px; font-size:15px; box-shadow:inset 0 0 0 1px rgba(14,61,33,.08); }
@@ -253,11 +253,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .map-pin { width:32px; height:32px; }
 .map-pin::before { content:""; position:absolute; inset:-8px; border-radius:50%; }
 
-.account-overlay { z-index:140; padding:10px; }
+.account-overlay { z-index:140; padding:calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)); }
 .account-dialog {
   position:relative;
   width:min(100%,620px);
-  max-height:calc(100vh - 20px);
+  max-height:calc(100vh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow:auto;
   padding:24px 20px calc(22px + env(safe-area-inset-bottom));
   border-radius:20px;
@@ -324,11 +324,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 
 @media (min-width:760px) {
   body { padding-bottom:44px; }
-  .hdr { padding:12px 22px; }
+  .hdr { padding:calc(12px + env(safe-area-inset-top)) max(22px,env(safe-area-inset-right)) 12px max(22px,env(safe-area-inset-left)); }
   .wrap { max-width:1180px; padding:24px 24px 42px; }
   .app-nav {
     position:sticky;
-    top:0;
+    top:env(safe-area-inset-top);
     z-index:45;
     grid-template-columns:repeat(4,minmax(0,1fr));
     gap:8px;
@@ -422,6 +422,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
   .courses-show-map .course-map { height:58vh; min-height:340px; aspect-ratio:auto; }
 }
 @media (min-width:760px) {
+  .rq-done-bar { bottom:calc(10px + env(safe-area-inset-bottom)); }
   .course-view-switch { display:none; }
 }
 
@@ -433,3 +434,20 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
   .map-pin-cluster { background:#1a2018; color:#d6eedd; border-color:#5a9a72; }
   .course-view-switch button[aria-pressed="true"] { background:#2a3a2c; }
 }
+
+/* Home Screen install card and Account help links. */
+.install-card { margin-bottom:16px; padding:14px; border:1px solid var(--gb); border-radius:var(--r); background:var(--gl); box-shadow:var(--shadow); }
+.install-card-title { font-size:18px; line-height:1.3; color:var(--ink-strong); }
+.install-card-text { margin-top:6px; color:var(--text); font-size:17px; line-height:1.5; }
+.install-share-icon { width:20px; height:20px; display:inline-block; vertical-align:-4px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; color:var(--ink-accent); }
+.install-card-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin-top:12px; }
+.install-primary { min-height:48px; padding:10px 24px; border:0; border-radius:12px; background:var(--g2); color:#fff; font-size:16px; font-weight:750; cursor:pointer; }
+.install-link,.install-dismiss,.help-links a { min-height:48px; display:inline-flex; align-items:center; padding:8px 2px; border:0; background:transparent; color:var(--ink-accent); font-size:16px; font-weight:750; text-decoration:underline; cursor:pointer; }
+.install-account-btn { margin-top:12px; }
+.help-links { display:flex; flex-direction:column; align-items:flex-start; margin-top:4px; }
+@media (prefers-color-scheme:dark) {
+  .install-card { background:#202d21; border-color:#344536; }
+}
+
+/* Status bar backdrop for the installed app (black-translucent status bar). Height is 0 in a browser tab. */
+body::before { content:""; position:fixed; top:0; left:0; right:0; height:env(safe-area-inset-top); background:var(--g1); z-index:90; pointer-events:none; }

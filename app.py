@@ -4,6 +4,7 @@ Serves the frontend and provides API endpoints for
 fetching tee times and booking via The Villages system.
 """
 
+import hashlib
 import hmac
 import json
 import logging
@@ -713,11 +714,16 @@ def validate_api_json():
             return jsonify({"success": False, "error": f"Invalid {key.replace('_', ' ')}."}), 400
 
 
+# App shell pages and the service worker must always revalidate so a deploy
+# reaches every device on its next visit.
+_NO_CACHE_PAGES = frozenset({"/", "/install", "/help", "/offline", "/sw.js", "/manifest.webmanifest"})
+
+
 @app.after_request
 def api_cache_policy(response):
     if request.path.startswith("/api/") and response.mimetype != "image/png":
         response.headers["Cache-Control"] = "no-store"
-    if request.path == "/":
+    if request.path in _NO_CACHE_PAGES:
         response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -943,6 +949,86 @@ def map_image_route():
 @app.route("/")
 def index():
     return send_from_directory("templates", "index.html")
+
+
+# Served instead of templates/sw.js when DISABLE_SERVICE_WORKER=1. It registers no
+# fetch listener, so it becomes inert (no fetch handling, caches deleted), and it
+# asks the browser to unregister it.
+_KILL_SWITCH_WORKER = (
+    "self.addEventListener('install', () => { self.skipWaiting(); });\n"
+    "self.addEventListener('activate', (event) => {\n"
+    "  event.waitUntil(\n"
+    "    caches.keys()\n"
+    "      .then((names) => Promise.all(names.map((name) => caches.delete(name))))\n"
+    "      .then(() => self.registration.unregister())\n"
+    "  );\n"
+    "});\n"
+)
+
+
+def _compute_asset_version():
+    """First 12 hex characters of sha256 over the page and every local script and stylesheet it loads."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(root, "templates", "index.html"), "rb") as handle:
+        page = handle.read()
+    digest = hashlib.sha256(page)
+    text = page.decode("utf-8")
+    references = []
+    for match in re.finditer(r"<script\b[^>]*\bsrc=\"(/static/[^\"]+)\"|<link\b[^>]*\brel=\"stylesheet\"[^>]*\bhref=\"(/static/[^\"]+)\"", text):
+        references.append((match.start(), match.group(1) or match.group(2)))
+    for _position, reference in sorted(references):
+        relative = reference.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+        with open(os.path.join(root, *relative.split("/")), "rb") as handle:  # raises if the file is missing
+            digest.update(handle.read())
+    return digest.hexdigest()[:12]
+
+
+_ASSET_VERSION = _compute_asset_version()
+
+
+@app.route("/api/version", methods=["GET"])
+def asset_version():
+    """Let a long-lived installed app notice that a deploy changed the page. Reveals nothing secret."""
+    return jsonify({"version": _ASSET_VERSION})
+
+
+@app.route("/manifest.webmanifest")
+def web_app_manifest():
+    return send_from_directory("static", "manifest.webmanifest", mimetype="application/manifest+json")
+
+
+def _build_service_worker_body():
+    root = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(root, "templates", "offline.html"), "rb") as handle:
+        version = hashlib.sha256(handle.read()).hexdigest()[:12]
+    with open(os.path.join(root, "templates", "sw.js"), encoding="utf-8") as handle:
+        return handle.read().replace("__OFFLINE_VERSION__", version)
+
+
+# Built once at import: the offline page cannot change without a deploy, and every deploy restarts the app.
+_SERVICE_WORKER_BODY = _build_service_worker_body()
+
+
+@app.route("/sw.js")
+def service_worker():
+    if os.environ.get("DISABLE_SERVICE_WORKER") == "1":
+        return Response(_KILL_SWITCH_WORKER, mimetype="application/javascript")
+    return Response(_SERVICE_WORKER_BODY, mimetype="application/javascript")
+
+
+@app.route("/offline")
+def offline_page():
+    return send_from_directory("templates", "offline.html")
+
+
+@app.route("/install")
+def install_guide():
+    return send_from_directory("templates", "install.html")
+
+
+@app.route("/help")
+def user_guide():
+    return send_from_directory("templates", "help.html")
 
 
 @app.route("/healthz")

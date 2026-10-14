@@ -6,6 +6,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="theme-color" content="#14532d"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-title" content="Fairways"/>
+  <link rel="manifest" href="/manifest.webmanifest"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png"/>
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png"/>
   <title>Village Fairways</title>
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
   <link rel="stylesheet" href="/static/vendor/leaflet.markercluster/MarkerCluster.css"/>
@@ -520,6 +525,8 @@
   </nav>
 
   <div class="app-view active" id="view-book">
+  <aside class="install-card" id="install-card" aria-labelledby="install-card-title" hidden></aside>
+
   <div class="sec" id="sec-date">
     <div class="sec-hdr"><div class="sec-icon"><svg class="ic"><use href="#i-cal"/></svg></div>
       <div><div class="sec-title">Play Date</div><div class="sec-sub">Select when you'd like to play</div></div>
@@ -843,6 +850,15 @@
         <div id="preferences-status" class="contact-status" aria-live="polite"></div>
       </div>
     </details>
+
+    <section class="account-section" aria-labelledby="account-help-heading">
+      <h3 id="account-help-heading">Help</h3>
+      <p id="install-account-status"></p>
+      <div class="help-links">
+        <a href="/install">Home Screen install guide</a>
+        <a href="/help">User guide</a>
+      </div>
+    </section>
 
     <button type="button" class="switch-user switch-user-btn" onclick="closeAccountDialog();switchUser()">Log out of this device</button>
   </section>
@@ -1671,5 +1687,6 @@ async function deleteRequest(rid){
 <script src="/static/vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
 <script src="/static/js/experience.js"></script>
 <script src="/static/js/interface.js"></script>
+<script src="/static/js/install.js"></script>
 </body>
 </html>

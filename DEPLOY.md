@@ -113,11 +113,23 @@ journalctl -u villages-golf.service -f                  # follow live
 
 Email results appear here: `email.sent ... status=202` on success, and `email.auth_fail ... status=401` when the MailerSend token is invalid or the sender is not verified.
 
-## Add to the iPhone Home Screen
+## Install the site on a phone
+
+The site is an installable web app. It serves a manifest at `/manifest.webmanifest`, a service worker at `/sw.js` (source in `templates/sw.js`), and an offline page at `/offline`. The installed Home Screen app (not a browser tab) also checks `/api/version` after it has been in the background for 10 minutes or more. It reloads itself when a deploy changed the page, and only when the app is idle: no booking, request, or delete in progress, no open dialog, and no unconfirmed-booking notice on screen. The service worker caches only the offline page. It never caches app pages, scripts, styles, images, or API responses.
+
+To add the site to an iPhone or iPad Home Screen:
 
 1. Open https://villagefairways.com in Safari.
-2. Tap Share, then "Add to Home Screen."
-3. Name it "Villages Golf" and tap Add.
+2. Select Share.
+3. Select **Add to Home Screen**.
+4. Select **Add**.
+5. Open **Fairways** from the Home Screen and sign in once more. The Home Screen app keeps its own sign-in.
+
+The signed-in app shows the same steps in a dismissible card and in the Account dialog. Guests can read the plain-language guides at https://villagefairways.com/install and https://villagefairways.com/help.
+
+### Disable the service worker
+
+If the service worker misbehaves, set `DISABLE_SERVICE_WORKER=1` in the service environment and restart the service. The `/sw.js` route then serves an inert worker with no fetch handling that deletes its cache. It takes effect on each device's next visit. The browser might keep an inert registration, which has no effect on traffic. Remove the variable and restart to turn the worker back on.
 
 ## Docker alternative
 
