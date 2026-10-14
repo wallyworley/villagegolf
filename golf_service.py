@@ -208,6 +208,30 @@ def _unknown_result(message):
     return {"success": False, "unknown": True, "error": message}
 
 
+# Marks the "delete all players" link in the row for one reservation number.
+# Use regex literals only: a RegExp built from a string literal here loses its
+# backslashes twice (Python, then JavaScript) and silently never matches.
+_MARK_RESERVATION_DELETE_LINK_JS = """reservationNo => {
+    const rows = Array.from(document.querySelectorAll('table tr'));
+    for (const row of rows) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 3) continue;
+        const match = (cells[1].innerText || '').match(/Reservation\\s*No\\.?\\s*(\\d+)/i);
+        if (!match || match[1] !== reservationNo) continue;
+        const link = Array.from(row.querySelectorAll('a')).find(a =>
+            /^delete\\s+all\\s+players\\s+on\\s+this\\s+reservation$/i.test(
+                (a.innerText || '').replace(/\\s+/g, ' ').trim()
+            )
+        );
+        if (link) {
+            link.setAttribute('data-delete-reservation', reservationNo);
+            return true;
+        }
+    }
+    return false;
+}"""
+
+
 # Header and menu lines that every Villages golf page shares.
 _SITE_CHROME_LINES = frozenset({
     "common internet termslegal disclaimer", "common internet terms", "legal disclaimer",
@@ -1080,25 +1104,7 @@ class GolfService:
             if not any(_reservation_identity(item) == target for item in current):
                 return {"success": False, "error": "Reservation not found."}
 
-            found = page.evaluate("""reservationNo => {
-                const rows = Array.from(document.querySelectorAll('table tr'));
-                const token = new RegExp('Reservation\\s*No\\.?\\s*' + reservationNo + '(?!\\d)', 'i');
-                for (const row of rows) {
-                    const cells = row.querySelectorAll('td');
-                    if (cells.length < 3) continue;
-                    if (!token.test(cells[1].innerText || '')) continue;
-                    const link = Array.from(row.querySelectorAll('a')).find(a =>
-                        /^delete\\s+all\\s+players\\s+on\\s+this\\s+reservation$/i.test(
-                            (a.innerText || '').replace(/\\s+/g, ' ').trim()
-                        )
-                    );
-                    if (link) {
-                        link.setAttribute('data-delete-reservation', reservationNo);
-                        return true;
-                    }
-                }
-                return false;
-            }""", target)
+            found = page.evaluate(_MARK_RESERVATION_DELETE_LINK_JS, target)
             if not found:
                 return {"success": False, "error": "Delete action is not available for this reservation."}
 

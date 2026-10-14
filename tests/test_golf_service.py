@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import unittest
 from collections import OrderedDict
 from datetime import date
@@ -409,6 +411,40 @@ class GolfServiceTests(unittest.TestCase):
         page = SelectionPage()
         service._fill_request_golfers(page, ["1", "2", "3", "4"])
         self.assertEqual([slot.value for slot in page.slots], ["1", "2", "3", "4"])
+
+    def test_delete_link_script_marks_only_the_exact_reservation_row(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        harness = r"""
+const mark = eval(process.argv[1]);
+function link(text) { return {innerText: text, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }}; }
+function row(cellTexts, links) {
+  return {querySelectorAll: sel => sel === 'td' ? cellTexts.map(t => ({innerText: t})) : links};
+}
+const longer = link('DELETE ALL PLAYERS ON THIS RESERVATION');
+const exact = link('DELETE ALL\nPLAYERS ON THIS RESERVATION');
+const rows = [
+  row(['Action', 'Open Reservations', 'Description'], []),
+  row(['View DELETE ALL PLAYERS ON THIS RESERVATION', 'Reservation No. 5661601', 'Friday: 10/17 at 7:18 AM'], [link('View'), longer]),
+  row(['View DELETE ALL PLAYERS ON THIS RESERVATION', 'Reservation No. 566160', 'Friday: 10/17 at 7:18 AM'], [link('View'), exact]),
+];
+globalThis.document = {querySelectorAll: () => rows};
+console.log(JSON.stringify({
+  found: mark('566160'),
+  exact: exact.attrs['data-delete-reservation'] || null,
+  longer: longer.attrs['data-delete-reservation'] || null,
+  missing: mark('123456'),
+}));
+"""
+        result = subprocess.run(
+            [node, "-e", harness, golf_service._MARK_RESERVATION_DELETE_LINK_JS],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(
+            result.stdout.strip(),
+            '{"found":true,"exact":"566160","longer":null,"missing":false}',
+        )
 
     def test_reservation_delete_rejects_confirmation_for_another_id(self):
         page = WrongDeleteConfirmationPage()
