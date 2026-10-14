@@ -398,6 +398,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 
 .email-nudge { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:2px 10px; margin-top:10px; padding:10px 12px; border-radius:10px; background:var(--gl); color:var(--text); font-size:14px; line-height:1.4; text-align:center; }
 .email-nudge .text-action { min-height:40px; }
+.mytimes-notice { margin-top:10px; padding:10px 12px; border-radius:10px; border-left:4px solid var(--ink-error); background:var(--gl); color:var(--text); font-size:14px; line-height:1.45; }
 
 /* Course map: numbered pins, ringed cluster bubbles, location button and dot. */
 .map-pin { width:32px; height:32px; font-size:13px; }

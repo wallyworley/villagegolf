@@ -137,6 +137,7 @@ function findCourse(value){
 
 function resetExperienceAccount(username){
   closeOriginPicker(false);
+  showBookingNotice('');
   EXPERIENCE.username=username||null;
   EXPERIENCE.courses=[];
   EXPERIENCE.preferences={favorites:[],home:null,arrival_buffer_minutes:20,presets:[],max_cart_minutes:null};
@@ -1018,13 +1019,23 @@ confirmBook=async function enhancedConfirmBook(){
 };
 
 const baseBookingUnconfirmed=bookingUnconfirmed;
+// The unconfirmed-booking message, including any reason the Villages site gave,
+// stays above the list while My Tee Times reloads instead of being overwritten.
+function showBookingNotice(message){
+  const notice=document.getElementById('myTimesNotice');
+  if(!notice) return;
+  notice.textContent=message||'';
+  notice.hidden=!message;
+}
 bookingUnconfirmed=function invalidatingBookingUnconfirmed(message){
   EXPERIENCE.myTimesLoaded=false; // My Tee Times must reload to verify the unknown booking
-  baseBookingUnconfirmed(message);
+  showBookingNotice(message);
+  baseBookingUnconfirmed('Checking your reservations…');
 };
 
 const baseShowSuccess=showSuccess;
 showSuccess=function enhancedShowSuccess(data){
+  showBookingNotice('');
   baseShowSuccess(data);
   const courseName=data.course||S.pendingCourse;
   const card=document.getElementById('conf-card');

@@ -100,9 +100,44 @@ class BookingBoundaryService(GolfService):
     def _session_usable(self, _session):
         return True
 
-    def _reconcile_booking_outcome(self, *_args):
+    def _reconcile_booking_outcome(self, *_args, **_kwargs):
         self.reconciled = True
         return {"success": False, "unknown": True, "error": "verify"}
+
+
+class DeclinedReplyPage(SubmitRaisesPage):
+    """The Villages answers the submit with a page that has no reservation number."""
+
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+
+    def wait_for_url(self, pattern, timeout=None):
+        self.url = "https://example.test/" + ("glf109g" if "glf109g" in pattern else "glf109y")
+
+    def evaluate(self, _script, *_args):
+        return None
+
+    def inner_text(self, _selector):
+        return self.body
+
+
+class DeclinedReplyService(BookingBoundaryService):
+    def _reconcile_booking_outcome(self, *args, **kwargs):
+        return GolfService._reconcile_booking_outcome(self, *args, **kwargs)
+
+    def _find_booked_reservation(self, *_args):
+        return None
+
+    def _close_active(self):
+        pass
+
+
+VILLAGES_HEADER = (
+    "Common Internet TermsLegal Disclaimer\nWednesday October 14, 2026\nHOME\nEMAIL\n"
+    "GOLF\nEVENTS\nNEWS\nUSER INFO\nHELP\nLOGOUT\nThe Villages Tee Time System\n"
+    "Reservations\nPat Golfer\nYour ID is: 100001\n\nClick here for Help\n\n"
+)
 
 
 class SelectionLocator:
@@ -308,6 +343,47 @@ class GolfServiceTests(unittest.TestCase):
         )
         self.assertTrue(service.reconciled)
         self.assertTrue(result["unknown"])
+
+    def test_site_reply_drops_the_shared_page_header(self):
+        reply = golf_service._site_reply_text(
+            VILLAGES_HEADER + "Golfer 100002 already has a tee time on this date.\nReturn"
+        )
+        self.assertEqual(reply, "Golfer 100002 already has a tee time on this date. Return")
+        self.assertLessEqual(len(golf_service._site_reply_text("word " * 200)), 301)
+
+    def test_declined_booking_shows_what_the_villages_site_said(self):
+        page = DeclinedReplyPage(
+            VILLAGES_HEADER + "Golfer 100002 already has a tee time on this date."
+        )
+        tee_row = FakeElement(attrs={"cells": [
+            FakeElement(child=page.link),
+            FakeElement("Southern Oaks"),
+            FakeElement("02:05"),
+        ]})
+        page.query_selector_all = lambda _selector, calls=iter([
+            [tee_row],
+            [page.allocation],
+        ]): next(calls)
+        context = {
+            "user": "walter", "date_str": "20260910", "play_date": "2026-09-10",
+            "date_label": "Thursday, Sep 10", "course_type": "Executive",
+            "golfer_ids": ["100001"], "num_golfers": 1, "has_guests": False,
+            "search_id": "search-1", "offered_times": [("Southern Oaks", "02:05")],
+            "preexisting_reservation_ids": set(),
+        }
+        with self.assertLogs("golf_service", "WARNING") as logs:
+            result = DeclinedReplyService(page, context).book_tee_time(
+                "walter", "pw", "pin", "Southern Oaks", "02:05",
+                expected_date="20260910", expected_golfer_ids=["100001"],
+                expected_num_golfers=1, expected_course_type="Executive",
+                expected_has_guests=False, search_id="search-1",
+            )
+        self.assertTrue(result["unknown"])
+        self.assertIn("already has a tee time on this date", result["error"])
+        self.assertIn("check My Tee Times", result["error"])
+        self.assertNotIn("Your ID is", result["error"])
+        self.assertNotIn("LOGOUT", result["error"])
+        self.assertTrue(any("already has a tee time" in line for line in logs.output))
 
     def test_booking_success_uses_authoritative_search_context(self):
         context = {

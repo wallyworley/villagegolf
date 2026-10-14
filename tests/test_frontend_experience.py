@@ -399,6 +399,17 @@ bookingUnconfirmed('Unknown');
 assert.equal(EXPERIENCE.myTimesLoaded,false,'An unknown booking must make My Tee Times reload to verify it.');
 """)
 
+    def test_unconfirmed_booking_message_survives_the_reload(self):
+        self.run_behavior("""
+const notice=document.getElementById('myTimesNotice');
+bookingUnconfirmed('The Villages site said: golfer already booked.');
+assert.equal(notice.textContent,'The Villages site said: golfer already booked.');
+assert.equal(notice.hidden,false);
+assert.equal(baseCalls.bookingUnconfirmed[0],'Checking your reservations…','The status line is replaced by the reload, so the reason lives in the notice.');
+showSuccess({course:'Silver Lake',display_time:'8:15 AM'});
+assert.equal(notice.hidden,true,'A confirmed booking clears the old warning.');
+""")
+
     def test_request_review_uses_plain_twelve_hour_times(self):
         self.run_behavior("""
 assert.equal(clockLabel('13:05'),'1:05 PM');

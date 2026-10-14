@@ -208,6 +208,42 @@ def _unknown_result(message):
     return {"success": False, "unknown": True, "error": message}
 
 
+# Header and menu lines that every Villages golf page shares.
+_SITE_CHROME_LINES = frozenset({
+    "common internet termslegal disclaimer", "common internet terms", "legal disclaimer",
+    "home", "email", "golf", "events", "news", "user info", "help", "logout",
+    "the villages tee time system", "click here for help",
+})
+
+
+def _site_reply_text(body, limit=300):
+    """Return the message part of a Villages golf page without its header.
+
+    A booking reply without a reservation number usually explains why the
+    site declined it, so the golfer sees that reason instead of only a
+    generic warning.
+    """
+    lines = [_normalize_space(line) for line in str(body or "").splitlines()]
+    lines = [line for line in lines if line]
+    for index, line in enumerate(lines):
+        if line.lower() == "click here for help":
+            lines = lines[index + 1:]
+            break
+    kept = [
+        line for line in lines
+        if line.lower() not in _SITE_CHROME_LINES
+        and not re.match(r"your id is\b", line, re.IGNORECASE)
+        and not re.fullmatch(
+            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+\w+\s+\d{1,2},\s*\d{4}",
+            line, re.IGNORECASE,
+        )
+    ]
+    text = " ".join(kept)
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0] + "…"
+    return text
+
+
 def _timeout_error():
     return "The Villages golf site took too long to respond. Please try again."
 
@@ -771,7 +807,8 @@ class GolfService:
         }
 
     def _reconcile_booking_outcome(self, page, tvn_username, tvn_password,
-                                   golf_password, ctx, course_name, time_str):
+                                   golf_password, ctx, course_name, time_str,
+                                   site_reply=""):
         found = self._find_booked_reservation(
             page, tvn_username, tvn_password, golf_password,
             time_str, ctx.get("date_str"), course_name,
@@ -782,6 +819,11 @@ class GolfService:
                 found["reservation_no"], course_name, time_str, ctx
             )
         self._close_active()
+        if site_reply:
+            return _unknown_result(
+                "We could not confirm your booking, so check My Tee Times before "
+                f"trying again. The Villages site said: “{site_reply}”"
+            )
         return _unknown_result(
             "We could not confirm your booking. Open My Tee Times to check "
             "whether it went through before trying again."
@@ -1303,25 +1345,37 @@ class GolfService:
             # does NOT mean the booking failed. Never report a plain failure
             # here without first checking whether it actually went through.
             res_no = None
+            site_reply = ""
             try:
                 page.wait_for_url("**/glf109g**", timeout=30000)
                 body = page.inner_text("body")
                 res_match = re.search(r"Reservation No\.\s*(\d+)", body)
                 if res_match:
                     res_no = res_match.group(1)
+                else:
+                    site_reply = _site_reply_text(body)
             except PWTimeout:
                 logger.warning(
                     "book: glf109g confirmation timed out user=%s time=%s \u2014 reconciling",
                     tvn_username, time_str,
                 )
+                try:
+                    site_reply = _site_reply_text(page.inner_text("body"))
+                except Exception:
+                    site_reply = ""
 
             # If we didn't capture a real reservation number (slow confirmation,
             # reworded page, or a silent commit), reconcile against the live
             # reservations list before deciding success/failure.
             if not res_no:
+                logger.warning(
+                    "book: no reservation number in the Villages reply user=%s "
+                    "course=%s time=%s reply=%r",
+                    tvn_username, course_name, time_str, site_reply,
+                )
                 return self._reconcile_booking_outcome(
                     page, tvn_username, tvn_password, golf_password,
-                    ctx, course_name, time_str,
+                    ctx, course_name, time_str, site_reply=site_reply,
                 )
 
             return self._booking_success(res_no, course_name, time_str, ctx)
