@@ -87,6 +87,17 @@ systemctl restart villages-golf.service
 
 Common vars: `SECRET_KEY`, `MAILERSEND_API_TOKEN`, `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME`, `USER_DB_ENCRYPTION_KEY`, `LOG_LEVEL`. Do not set the local-dev-only flags `SESSION_COOKIE_SECURE=0` or `ALLOW_PLAINTEXT_USER_DB=1` on the VPS.
 
+## Turn on phone notifications
+
+Phone notifications need a VAPID key pair on the server. To set it up, follow these steps:
+
+1. On your machine, run `.venv/bin/python scripts/generate_vapid_keys.py` once.
+2. Add the three lines it prints (`VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`) to `/opt/villages-golf-app/.env` on the VPS.
+3. Restart the service with `systemctl restart villages-golf.service`.
+4. Sign in on a phone, open **Account**, select **Turn on notifications**, and select **Send a test notification**.
+
+Keep the keys. Do not rotate them casually: a new key pair invalidates every device's subscription, and each golfer must turn notifications on again. If the private key and public key do not match, the app logs `push.config_invalid` at startup and keeps notifications off. Notification activity appears in the logs as `push.sent`, `push.no_devices`, `push.reminder_stale`, `push.reminder_deferred`, `push.reminder_quiet_deferred`, `push.reminder_quiet_cancel`, and `push.reminder_cancelled_missing`. A separate push sender thread checks for due notifications every 60 seconds (`PUSH_LOOP_INTERVAL` changes the interval) and verifies at most three reminders per pass.
+
 ## Backups
 
 A systemd timer backs up the user database every night and keeps the last 14 daily copies.

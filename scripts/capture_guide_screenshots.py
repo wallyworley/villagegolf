@@ -18,6 +18,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import generate_vapid_keys  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "static" / "guide"
 PORT = 8095
@@ -38,7 +41,10 @@ def ensure_port_free():
 
 def start_server():
     ensure_port_free()
-    env = dict(os.environ, PREVIEW_PORT=str(PORT), DISABLE_REQUEST_WATCHER="1", PREVIEW_OFFLINE_MAPS="1")
+    # A throwaway key pair, never printed or saved, so the Phone notifications section renders.
+    private_key, public_key = generate_vapid_keys.generate()
+    env = dict(os.environ, PREVIEW_PORT=str(PORT), DISABLE_REQUEST_WATCHER="1", PREVIEW_OFFLINE_MAPS="1",
+               VAPID_PRIVATE_KEY=private_key, VAPID_PUBLIC_KEY=public_key)
     server = subprocess.Popen([sys.executable, str(ROOT / "tests" / "preview_server.py")], cwd=str(ROOT), env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(60):
@@ -128,7 +134,8 @@ def main():
 
                 page.locator("#hdr-badge").click()
                 page.wait_for_timeout(500)
-                page.locator("#account-help-heading").scroll_into_view_if_needed()
+                page.wait_for_selector("#notify-section:not([hidden])", timeout=5000)
+                page.locator("#account-notify-heading").scroll_into_view_if_needed()
                 page.evaluate("document.querySelector('.account-dialog').scrollTop+=140")
                 page.wait_for_timeout(300)
                 shot(page, "account.jpg")

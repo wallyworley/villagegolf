@@ -7,3 +7,5 @@ cryptography==50.0.1
 # User profiles are stored in SQLite (stdlib `sqlite3`) — no external store.
 # cryptography encrypts the user blob; a stable USER_DB_ENCRYPTION_KEY is required.
 # Python 3.10+; install the matching Chromium after updating Playwright.
+requests==2.32.5
+pywebpush==2.5.0

@@ -851,6 +851,12 @@
       </div>
     </details>
 
+    <section class="account-section" id="notify-section" aria-labelledby="account-notify-heading" hidden>
+      <h3 id="account-notify-heading">Phone notifications</h3>
+      <p id="notify-status"></p>
+      <div class="notify-actions" id="notify-actions"></div>
+    </section>
+
     <section class="account-section" aria-labelledby="account-help-heading">
       <h3 id="account-help-heading">Help</h3>
       <p id="install-account-status"></p>
@@ -946,6 +952,14 @@ function showLogin(){
   showScreen('login-screen');
 }
 
+// After a sign-in, move this phone's notification subscription to the account that just signed in.
+function syncPushAfterSignIn(){
+  try{
+    const pending=window.VFNotify?.syncSubscription?.({force:true});
+    if(pending&&typeof pending.catch==='function') pending.catch(()=>{});
+  }catch(e){}
+}
+
 async function loginUser(){
   const username=document.getElementById('login-user-input').value.trim();
   const password=document.getElementById('login-pass-input').value;
@@ -960,6 +974,7 @@ async function loginUser(){
     const d=await r.json();
     if(d.ok){
       enterApp(d);
+      syncPushAfterSignIn();
     }
     else{
       // First-timers who type valid Villages credentials still fail here (they
@@ -1003,6 +1018,7 @@ async function registerUser(){
 
     if(d.ok){
       enterApp(d);
+      syncPushAfterSignIn();
     } else {
       err.textContent=d.error||'Registration failed.';
     }
@@ -1023,9 +1039,18 @@ function updateHeader(name, primary){
 
 // ── Switch user ──
 async function switchUser(){
+  let pushEndpoint=null;
   try{
-    await fetch('/api/logout',{method:'POST'});
+    pushEndpoint=(await window.VFNotify?.currentEndpoint?.())||null;
+  }catch(e){ pushEndpoint=null; }
+  try{
+    await fetch('/api/logout',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({push_endpoint:pushEndpoint}),
+    });
   }catch(e){}
+  try{ window.VFNotify?.clearSyncStamp?.(); }catch(e){}
   resetApp();
   resetMyTeeTimes();
   showLogin();
@@ -1688,5 +1713,6 @@ async function deleteRequest(rid){
 <script src="/static/js/experience.js"></script>
 <script src="/static/js/interface.js"></script>
 <script src="/static/js/install.js"></script>
+<script src="/static/js/notify.js"></script>
 </body>
 </html>

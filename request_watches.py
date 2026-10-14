@@ -108,6 +108,14 @@ def _ensure_schema():
                 "CREATE INDEX IF NOT EXISTS notification_outbox_due "
                 "ON notification_outbox(status, notify_after)"
             )
+            # Additive: a reference (for example a reservation number) lets a
+            # scheduled row be cancelled without knowing its id.
+            outbox_columns = {r[1] for r in conn.execute("PRAGMA table_info(notification_outbox)")}
+            if "ref" not in outbox_columns:
+                conn.execute("ALTER TABLE notification_outbox ADD COLUMN ref TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS notification_outbox_ref ON notification_outbox(kind, ref)"
+            )
         _initialized = True
 
 
@@ -380,15 +388,23 @@ def all_watches():
 
 # ── notification outbox (generic; not tied to a check-loop watch) ───────────
 
-def enqueue_notification(kind, username, email, payload):
-    """Queue a notification for durable, retryable delivery. Returns the row id."""
+def enqueue_notification(kind, username, email, payload, notify_after=None, ref=None):
+    """Queue a notification for durable, retryable delivery. Returns the row id.
+
+    `notify_after` is an aware UTC datetime (a naive one is read as UTC) or None
+    for "send now". `ref` is an optional lookup key for cancel_outbox_ref."""
     _ensure_schema()
+    due = now_utc_str()
+    if notify_after is not None:
+        if notify_after.tzinfo is None:
+            notify_after = notify_after.replace(tzinfo=_UTC)
+        due = notify_after.astimezone(_UTC).strftime(_FMT)
     with closing(_connect()) as conn, conn:
         cur = conn.execute(
             "INSERT INTO notification_outbox "
-            "(kind, username, email, payload, status, attempts, notify_after, created_at) "
-            "VALUES (?,?,?,?,'pending',0,?,?)",
-            (kind, username, email, json.dumps(payload), now_utc_str(), now_utc_str()),
+            "(kind, username, email, payload, status, attempts, notify_after, created_at, ref) "
+            "VALUES (?,?,?,?,'pending',0,?,?,?)",
+            (kind, username, email, json.dumps(payload), due, now_utc_str(), ref),
         )
         return cur.lastrowid
 
@@ -412,20 +428,41 @@ def claim_outbox(outbox_id):
         return cur.rowcount == 1
 
 
-def due_outbox(limit=20):
+def due_outbox(limit=20, kinds=None, exclude_kinds=None):
     """Return outbox rows ready to send: pending rows whose notify_after has
     passed, plus 'sending' rows claimed more than _CLAIM_STALE_SECONDS ago
     (a sender that crashed or was killed mid-send leaves its claim behind,
-    so those rows are retried instead of stuck forever)."""
+    so those rows are retried instead of stuck forever). `kinds` limits the
+    result to those kinds and `exclude_kinds` leaves those kinds out, so each
+    kind has exactly one sender."""
     _ensure_schema()
     now_str = now_utc_str()
     stale_before = (datetime.now(_UTC) - timedelta(seconds=_CLAIM_STALE_SECONDS)).strftime(_FMT)
+    sql = ("SELECT * FROM notification_outbox WHERE "
+           "((status='pending' AND notify_after<=?) OR (status='sending' AND notify_after<=?))")
+    args = [now_str, stale_before]
+    if kinds:
+        sql += " AND kind IN (%s)" % ",".join("?" * len(kinds))
+        args.extend(sorted(kinds))
+    if exclude_kinds:
+        sql += " AND kind NOT IN (%s)" % ",".join("?" * len(exclude_kinds))
+        args.extend(sorted(exclude_kinds))
+    sql += " ORDER BY notify_after LIMIT ?"
+    args.append(limit)
+    with closing(_connect()) as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [dict(row) for row in rows]
+
+
+def outbox_rows(ids):
+    """Return the outbox rows with these ids (any status), oldest id first."""
+    ids = [int(i) for i in ids or []]
+    if not ids:
+        return []
+    _ensure_schema()
     with closing(_connect()) as conn:
         rows = conn.execute(
-            "SELECT * FROM notification_outbox WHERE "
-            "(status='pending' AND notify_after<=?) OR (status='sending' AND notify_after<=?) "
-            "ORDER BY notify_after LIMIT ?",
-            (now_str, stale_before, limit),
+            "SELECT * FROM notification_outbox WHERE id IN (%s) ORDER BY id" % ",".join("?" * len(ids)), ids
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -466,4 +503,43 @@ def cancel_outbox_for_user(username):
         conn.execute(
             "UPDATE notification_outbox SET status='cancelled' WHERE username=? AND status IN ('pending', 'sending')",
             (username,),
+        )
+
+
+def cancel_outbox_ref(kind, ref):
+    """Cancel still-active (pending or in-flight) rows of one kind with one ref.
+    Returns how many rows were cancelled."""
+    if not kind or not ref:
+        return 0
+    _ensure_schema()
+    with closing(_connect()) as conn, conn:
+        cur = conn.execute(
+            "UPDATE notification_outbox SET status='cancelled' "
+            "WHERE kind=? AND ref=? AND status IN ('pending', 'sending')",
+            (kind, str(ref)),
+        )
+        return cur.rowcount
+
+
+def cancel_outbox(outbox_id):
+    """Cancel one still-active outbox row. Settled rows are left alone."""
+    _ensure_schema()
+    with closing(_connect()) as conn, conn:
+        conn.execute(
+            "UPDATE notification_outbox SET status='cancelled' "
+            "WHERE id=? AND status IN ('pending', 'sending')",
+            (outbox_id,),
+        )
+
+
+def defer_outbox(outbox_id, seconds):
+    """Put a claimed row back to pending and push its due time out by `seconds`,
+    without counting a delivery attempt."""
+    _ensure_schema()
+    later = (datetime.now(_UTC) + timedelta(seconds=seconds)).strftime(_FMT)
+    with closing(_connect()) as conn, conn:
+        conn.execute(
+            "UPDATE notification_outbox SET status='pending', notify_after=? "
+            "WHERE id=? AND status IN ('pending', 'sending')",
+            (later, outbox_id),
         )

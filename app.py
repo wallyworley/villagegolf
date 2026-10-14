@@ -15,7 +15,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -153,6 +153,7 @@ def _worker_public_error(action):
 # Self-contained local store — no external cloud dependency. See user_store.py.
 import user_store
 import request_watches
+import push_notifications
 import preferences as website_preferences
 
 # Fail fast at boot if credentials-at-rest encryption isn't configured, so we
@@ -424,7 +425,8 @@ class GolfWorker:
                     if mutation else _worker_public_error(action)}
         elapsed_ms = int((time.monotonic() - started) * 1000)
         global _worker_last_success_ts
-        if done["result"].get("success"):
+        # Closing a browser session says nothing about whether the Villages site works.
+        if done["result"].get("success") and method_name != "release_session":
             _worker_last_success_ts = time.time()
         app.logger.info(
             "worker.done request_id=%s action=%s duration_ms=%s success=%s",
@@ -489,6 +491,227 @@ def _send_pending_request_notifications():
             app.logger.exception("request_watch.notify_error")
 
 
+_PUSH_KINDS = frozenset({"push_booking", "push_reminder"})
+_REMINDER_STALE_BEFORE_TEE = timedelta(hours=1)
+_REMINDER_DEFER_SECONDS = 600
+_REMINDER_VERIFICATIONS_PER_PASS = 3
+_PUSH_LOOP_INTERVAL_SECONDS = int(os.environ.get("PUSH_LOOP_INTERVAL", "60"))
+_EASTERN = ZoneInfo("America/New_York")
+_REMINDER_ACTIVITY_WINDOW_SECONDS = 600
+_REMINDER_LATE_LIMIT_SECONDS = 3600
+
+# Worker-backed routes a golfer is actively using. The reminder check drives the
+# booker's shared browser session, which would break a search in progress.
+_WORKER_ACTIVITY_PATHS = frozenset({
+    "/api/refresh-buddies", "/api/tee-times", "/api/my-tee-times", "/api/delete-reservation",
+    "/api/book", "/api/request-courses", "/api/submit-request", "/api/my-requests",
+    "/api/delete-request",
+})
+_worker_activity = {}  # username -> time.time() of the last worker-backed request
+_worker_activity_lock = threading.Lock()
+
+
+def _note_worker_activity(username):
+    if not username:
+        return
+    with _worker_activity_lock:
+        _worker_activity[username] = time.time()
+
+
+def _recent_worker_activity(username, window=_REMINDER_ACTIVITY_WINDOW_SECONDS):
+    with _worker_activity_lock:
+        last = _worker_activity.get(username)
+    return last is not None and time.time() - last < window
+
+
+def _push_log(row, totals):
+    app.logger.info(
+        "push.sent kind=%s id=%s devices=%d sent=%d failed=%d gone=%d",
+        row["kind"], row["id"], totals["devices"], totals["sent"], totals["failed"], totals["gone"],
+    )
+
+
+def _finish_push_row(row, totals):
+    """Sent when any device got it or there were no devices (nothing to retry,
+    but logged so a silent drop is visible); otherwise retry."""
+    if totals["devices"] == 0:
+        app.logger.info("push.no_devices kind=%s id=%s", row["kind"], row["id"])
+    delivered = totals["devices"] == 0 or totals["sent"] > 0
+    request_watches.finish_outbox(row["id"], delivered)
+
+
+def _deliver_push_row(row, pause_before_worker=False):
+    """Send one claimed push_booking or push_reminder outbox row. Never raises:
+    an unexpected error leaves the row to retry. Returns True when the row used
+    the browser worker (a reminder verification)."""
+    try:
+        if not push_notifications.is_configured():
+            request_watches.finish_outbox(row["id"], False)
+            app.logger.warning("push.not_configured id=%s", row["id"])
+            return False
+        payload = json.loads(row["payload"])
+        recipients = payload.get("recipients") or []
+        if row["kind"] == "push_booking":
+            totals = push_notifications.send_to_users(
+                recipients, push_notifications.booking_payload(payload),
+                push_notifications.BOOKING_TTL_SECONDS,
+            )
+            _push_log(row, totals)
+            _finish_push_row(row, totals)
+            return False
+        return _deliver_reminder_row(row, payload, recipients, pause_before_worker)
+    except Exception:
+        request_watches.finish_outbox(row["id"], False)
+        app.logger.exception("push.outbox_error id=%s", row["id"])
+        return False
+
+
+def _release_booker_session(booker):
+    """Close the booker's pooled browser session after a reminder check so the
+    check never keeps (or evicts someone else for) a session slot."""
+    try:
+        get_worker().call(
+            "release_session", request_id="reminder", action="release_session", tvn_username=booker,
+        )
+    except Exception:
+        app.logger.exception("push.release_session_failed")
+
+
+def _next_open_hour(now):
+    """The next 7:00 AM Eastern strictly after `now` (aware UTC), in UTC."""
+    et = now.astimezone(_EASTERN)
+    day = et.date() if et.hour < 7 else et.date() + timedelta(days=1)
+    return datetime(day.year, day.month, day.day, 7, 0, tzinfo=_EASTERN).astimezone(timezone.utc)
+
+
+def _previous_open_hour(now):
+    """The most recent 7:00 AM Eastern at or before `now` (aware UTC), in UTC."""
+    et = now.astimezone(_EASTERN)
+    day = et.date() if et.hour >= 7 else et.date() - timedelta(days=1)
+    return datetime(day.year, day.month, day.day, 7, 0, tzinfo=_EASTERN).astimezone(timezone.utc)
+
+
+def _hold_for_quiet_hours(row, tee_at, now):
+    """Never deliver between 9 PM and 7 AM Eastern, however late the sender runs.
+    Inside quiet hours, wait for 7 AM when the tee time leaves room, else drop the
+    row. Returns True when the row was deferred or cancelled."""
+    eastern_hour = now.astimezone(_EASTERN).hour
+    if not (eastern_hour >= 21 or eastern_hour < 7):
+        return False
+    opens = _next_open_hour(now)
+    if tee_at - _REMINDER_STALE_BEFORE_TEE > opens:
+        request_watches.defer_outbox(row["id"], max(1, int((opens - now).total_seconds()) + 1))
+        app.logger.info("push.reminder_quiet_deferred id=%s", row["id"])
+    else:
+        request_watches.cancel_outbox(row["id"])
+        app.logger.info("push.reminder_quiet_cancel id=%s", row["id"])
+    return True
+
+
+def _deliver_reminder_row(row, payload, recipients, pause_before_worker=False):
+    now = datetime.now(timezone.utc)
+    try:
+        tee_at = datetime.fromisoformat(str(payload.get("tee_at_utc")))
+        if tee_at.tzinfo is None:
+            tee_at = tee_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        tee_at = None
+    if tee_at is None or now > tee_at - _REMINDER_STALE_BEFORE_TEE:
+        request_watches.cancel_outbox(row["id"])
+        app.logger.info("push.reminder_stale id=%s", row["id"])
+        return False
+    booker = payload.get("booker") or row["username"]
+    user = _get_user(booker)
+    if not user:
+        request_watches.cancel_outbox(row["id"])
+        return False
+    if _hold_for_quiet_hours(row, tee_at, now):
+        return False
+    scheduled = push_notifications.reminder_time_utc(
+        payload.get("play_date"), payload.get("display_time"), datetime(2000, 1, 1, tzinfo=timezone.utc),
+    )
+    # A reminder held overnight counts as late from 7 AM, not from its original schedule.
+    due_from = max(scheduled, _previous_open_hour(now)) if scheduled else None
+    late_seconds = (now - due_from).total_seconds() if due_from else _REMINDER_LATE_LIMIT_SECONDS
+    if _recent_worker_activity(booker) and late_seconds < _REMINDER_LATE_LIMIT_SECONDS:
+        request_watches.defer_outbox(row["id"], _REMINDER_DEFER_SECONDS)
+        app.logger.info("push.reminder_deferred id=%s", row["id"])
+        return False
+    if pause_before_worker:
+        _watch_pause()
+    try:
+        result = get_worker().call(
+            "view_my_tee_times",
+            request_id="reminder",
+            action="my_tee_times",
+            tvn_username=booker,
+            tvn_password=user["tvn_password"],
+            golf_password=user["golf_password"],
+        )
+    finally:
+        # Do not close a session the booker started while the check ran.
+        if not _recent_worker_activity(booker):
+            _release_booker_session(booker)
+    reservations = result.get("reservations") if isinstance(result, dict) else None
+    if not isinstance(result, dict) or not result.get("success") or not isinstance(reservations, list):
+        request_watches.finish_outbox(row["id"], False)
+        app.logger.info("push.reminder_verify_failed id=%s", row["id"])
+        return True
+    wanted = str(payload.get("reservation_no") or "").strip()
+    reservation = next((
+        r for r in reservations
+        if isinstance(r, dict) and wanted and str(r.get("reservation_no") or "").strip() == wanted
+    ), None)
+    if reservation is None:
+        request_watches.cancel_outbox(row["id"])
+        app.logger.info("push.reminder_cancelled_missing id=%s", row["id"])
+        return True
+    recipients = _recipients_still_booked(recipients, booker, reservation.get("golfer_ids"))
+    # Verification can be slow: check the quiet hours again against the clock now.
+    now = datetime.now(timezone.utc)
+    if _hold_for_quiet_hours(row, tee_at, now):
+        return True
+    ttl = max(60, int((tee_at - now).total_seconds()))
+    totals = push_notifications.send_to_users(
+        recipients, push_notifications.reminder_payload(payload, now), ttl,
+    )
+    _push_log(row, totals)
+    _finish_push_row(row, totals)
+    return True
+
+
+def _recipients_still_booked(recipients, booker, golfer_ids):
+    """When the verified reservation lists its golfers, keep only the booker and
+    recipients whose primary golfer ID is still on it."""
+    if not isinstance(golfer_ids, list) or not golfer_ids:
+        return recipients
+    on_it = {str(g) for g in golfer_ids}
+    kept = []
+    for username in recipients:
+        primary = ((_get_user(username) or {}).get("primary") or {}).get("id")
+        if username == booker or (primary is not None and str(primary) in on_it):
+            kept.append(username)
+    return kept
+
+
+def _deliver_outbox_row(row):
+    """Deliver one claimed non-push outbox row (booking confirmation emails).
+    An unknown kind fails immediately."""
+    if row["kind"] != "booking_confirmation":
+        request_watches.finish_outbox(row["id"], False, exhaust=True)
+        app.logger.warning("email.outbox_unknown_kind id=%s kind=%s", row["id"], row["kind"])
+        return
+    try:
+        sent = send_booking_confirmation(row["email"], **json.loads(row["payload"]))
+        request_watches.finish_outbox(row["id"], bool(sent))
+        app.logger.info(
+            "email.outbox_sent id=%s user=%s sent=%s", row["id"], row["username"], bool(sent),
+        )
+    except Exception:
+        request_watches.finish_outbox(row["id"], False)
+        app.logger.exception("email.outbox_error id=%s", row["id"])
+
+
 def _send_pending_outbox():
     """Deliver persisted outbox notifications (e.g. booking confirmations);
     retry failed sends across process restarts, mirroring
@@ -496,23 +719,43 @@ def _send_pending_outbox():
     request_watches.claim_outbox before it is acted on, so the immediate
     post-booking thread and the loop's own periodic pass can never both send
     the same row; a row this call loses the claim race for is skipped and
-    left to whichever sender claimed it."""
-    for row in request_watches.due_outbox():
+    left to whichever sender claimed it. Push rows have their own sender
+    (_send_push_outbox), so each row has one owner."""
+    for row in request_watches.due_outbox(exclude_kinds=_PUSH_KINDS):
         if not request_watches.claim_outbox(row["id"]):
             continue
-        if row["kind"] != "booking_confirmation":
-            request_watches.finish_outbox(row["id"], False, exhaust=True)
-            app.logger.warning("email.outbox_unknown_kind id=%s kind=%s", row["id"], row["kind"])
+        _deliver_outbox_row(row)
+
+
+def _send_outbox_rows(ids):
+    """Deliver exactly these outbox rows (the ones a booking just queued), right
+    away. Never touches a push_reminder row or any other due row."""
+    for row in request_watches.outbox_rows(ids):
+        if row["kind"] == "push_reminder" or row["status"] != "pending":
             continue
-        try:
-            sent = send_booking_confirmation(row["email"], **json.loads(row["payload"]))
-            request_watches.finish_outbox(row["id"], bool(sent))
-            app.logger.info(
-                "email.outbox_sent id=%s user=%s sent=%s", row["id"], row["username"], bool(sent),
-            )
-        except Exception:
-            request_watches.finish_outbox(row["id"], False)
-            app.logger.exception("email.outbox_error id=%s", row["id"])
+        if not request_watches.claim_outbox(row["id"]):
+            continue
+        if row["kind"] == "push_booking":
+            _deliver_push_row(row)
+        else:
+            _deliver_outbox_row(row)
+
+
+def _send_push_outbox():
+    """One pass of the push sender: deliver due push_booking and push_reminder
+    rows. At most _REMINDER_VERIFICATIONS_PER_PASS reminders are verified per
+    pass, with a short random pause between worker calls; the rest wait for the
+    next pass."""
+    if not push_notifications.is_configured():
+        return
+    verified = 0
+    for row in request_watches.due_outbox(limit=50, kinds=_PUSH_KINDS):
+        if row["kind"] == "push_reminder" and verified >= _REMINDER_VERIFICATIONS_PER_PASS:
+            continue
+        if not request_watches.claim_outbox(row["id"]):
+            continue
+        if _deliver_push_row(row, pause_before_worker=verified > 0):
+            verified += 1
 
 
 def _run_due_request_checks():
@@ -575,9 +818,21 @@ def _request_watch_loop():
         time.sleep(_WATCH_INTERVAL_SECONDS)
 
 
+def _push_outbox_loop():
+    time.sleep(20)  # let startup settle before the first pass
+    while True:
+        try:
+            _send_push_outbox()
+        except Exception:
+            app.logger.exception("push.loop_error")
+        time.sleep(_PUSH_LOOP_INTERVAL_SECONDS)
+
+
 def _start_request_watcher():
     if os.environ.get("DISABLE_REQUEST_WATCHER") == "1":
         return
+    threading.Thread(target=_push_outbox_loop, name="push-sender", daemon=True).start()
+    app.logger.info("push.loop_started interval_s=%d", _PUSH_LOOP_INTERVAL_SECONDS)
     threading.Thread(target=_request_watch_loop, name="request-watcher", daemon=True).start()
     app.logger.info("request_watch.started interval_s=%d", _WATCH_INTERVAL_SECONDS)
 
@@ -714,6 +969,14 @@ def validate_api_json():
             return jsonify({"success": False, "error": f"Invalid {key.replace('_', ' ')}."}), 400
 
 
+@app.before_request
+def track_worker_activity():
+    """Remember which golfer last used a worker-backed route (see _deliver_reminder_row)."""
+    if request.path in _WORKER_ACTIVITY_PATHS and session.get("auth"):
+        _note_worker_activity(session.get("username"))
+    return None
+
+
 # App shell pages and the service worker must always revalidate so a deploy
 # reaches every device on its next visit.
 _NO_CACHE_PAGES = frozenset({"/", "/install", "/help", "/offline", "/sw.js", "/manifest.webmanifest"})
@@ -796,6 +1059,53 @@ def _booking_recipients(golfer_ids, booking_result, course_name, booking_usernam
             _add(uname, _user_email(udata))
 
     return recipients
+
+
+def _push_recipients(golfer_ids, booking_username):
+    """Usernames to notify for a booking: the booker plus every registered user
+    whose primary golfer ID is in the booking. Unlike email, no address is needed."""
+    users_snapshot = _all_users()
+    golfer_id_strs = {str(g) for g in golfer_ids or []}
+    recipients = []
+    if booking_username and booking_username in users_snapshot:
+        recipients.append(booking_username)
+    for uname, udata in users_snapshot.items():
+        primary_id = (udata.get("primary") or {}).get("id")
+        if primary_id and str(primary_id) in golfer_id_strs and uname not in recipients:
+            recipients.append(uname)
+    return recipients
+
+
+def _enqueue_push_for_booking(result, username, request_id):
+    """Queue the booking notification (due now) and, when its time has not
+    passed, the reminder (due at the reminder time, keyed by reservation number)."""
+    reservation_no = str(result.get("reservation_no") or "").strip()
+    play_date = str(result.get("play_date") or "")
+    display_time = str(result.get("display_time") or "")
+    tee_at = push_notifications.tee_time_utc(play_date, display_time)
+    payload = {
+        "reservation_no": reservation_no,
+        "course": str(result.get("course") or ""),
+        "display_time": display_time,
+        "date_label": str(result.get("date_label") or request_watches.friendly_date(play_date) or ""),
+        "play_date": play_date,
+        "booker": username,
+        "recipients": _push_recipients(result.get("golfer_ids", []), username),
+        "tee_at_utc": tee_at.isoformat() if tee_at else "",
+    }
+    ids = [request_watches.enqueue_notification(
+        "push_booking", username, "", payload, ref=reservation_no or None,
+    )]
+    remind_at = push_notifications.reminder_time_utc(play_date, display_time, datetime.now(timezone.utc))
+    if remind_at is not None and reservation_no:
+        request_watches.enqueue_notification(
+            "push_reminder", username, "", payload, notify_after=remind_at, ref=reservation_no,
+        )
+    app.logger.info(
+        "push.enqueued request_id=%s recipients=%d reminder=%s",
+        request_id, len(payload["recipients"]), remind_at is not None,
+    )
+    return ids  # the reminder is not delivered by the post-booking thread
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -1181,6 +1491,8 @@ def register_user():
         "email": email or (_user_email(existing) if existing else ""),
         "preferences": website_preferences.get_preferences(existing or {}),
     }
+    if existing and existing.get("push_subscriptions"):
+        user_data["push_subscriptions"] = existing["push_subscriptions"]
     _set_user(tvn_username, user_data)
     _set_authenticated_user(tvn_username)
 
@@ -1464,6 +1776,12 @@ def delete_reservation():
         elapsed_ms,
         bool(result.get("success")),
     )
+    if result.get("success"):
+        try:
+            request_watches.cancel_outbox_ref("push_reminder", reservation_no)
+            request_watches.cancel_outbox_ref("push_booking", reservation_no)
+        except Exception:
+            app.logger.exception("push.cancel_reminder_failed request_id=%s", request_id)
     return jsonify(result)
 
 
@@ -1533,23 +1851,40 @@ def book_tee_time():
     # a successful booking into a failed response: any problem building or
     # enqueuing the confirmation is logged and swallowed.
     if result.get("success"):
+        outbox_ids = []
         try:
             recipients = _booking_recipients(
                 result.get("golfer_ids", []), result, result.get("course", course_name), username,
             )
             for recipient in recipients:
-                request_watches.enqueue_notification(
+                outbox_ids.append(request_watches.enqueue_notification(
                     "booking_confirmation", recipient["username"], recipient["email"], recipient["payload"],
-                )
+                ))
             app.logger.info("email.enqueued request_id=%s count=%d", request_id, len(recipients))
-            if os.environ.get("DISABLE_REQUEST_WATCHER") != "1":
+        except Exception:
+            app.logger.exception("email.enqueue_failed request_id=%s", request_id)
+
+        # Phone notifications, in their own guard so nothing here can change the
+        # booking response or the email path. Only a confirmed success (never
+        # "unknown") reaches this point.
+        if push_notifications.is_configured():
+            try:
+                outbox_ids.extend(_enqueue_push_for_booking(result, username, request_id))
+            except Exception:
+                app.logger.exception("push.enqueue_failed request_id=%s", request_id)
+
+        # One thread delivers exactly the rows this booking queued, right away.
+        # It never touches reminders or other due rows (the loops own those).
+        if outbox_ids and os.environ.get("DISABLE_REQUEST_WATCHER") != "1":
+            try:
                 threading.Thread(
-                    target=_send_pending_outbox,
+                    target=_send_outbox_rows,
+                    args=(list(outbox_ids),),
                     name=f"outbox-{request_id}",
                     daemon=True,
                 ).start()
-        except Exception:
-            app.logger.exception("email.enqueue_failed request_id=%s", request_id)
+            except Exception:
+                app.logger.exception("outbox.thread_failed request_id=%s", request_id)
 
     return jsonify(result)
 
@@ -1762,8 +2097,154 @@ def delete_request_route():
     return jsonify(result)
 
 
+_PUSH_TEST_LIMIT = 5
+_PUSH_TEST_WINDOW_SECONDS = 600
+_push_test_times = {}  # username -> [time.time() of each test request]
+_push_test_lock = threading.Lock()
+
+
+def _push_unavailable():
+    if push_notifications.is_configured():
+        return None
+    return jsonify({"success": False, "error": push_notifications.NOT_SET_UP_MESSAGE}), 503
+
+
+_PUSH_SUBSCRIBE_LIMIT = 30
+_push_subscribe_times = {}  # username -> [time.time() of each subscribe request]
+
+
+def _rate_limited(store, username, limit, window=_PUSH_TEST_WINDOW_SECONDS):
+    now = time.time()
+    with _push_test_lock:
+        recent = [t for t in store.get(username, []) if now - t < window]
+        if len(recent) >= limit:
+            store[username] = recent
+            return True
+        recent.append(now)
+        store[username] = recent
+        return False
+
+
+def _push_test_rate_limited(username):
+    return _rate_limited(_push_test_times, username, _PUSH_TEST_LIMIT)
+
+
+@app.route("/api/push/config", methods=["GET"])
+def push_config():
+    body = {
+        "enabled": push_notifications.is_configured(),
+        "public_key": push_notifications.public_key(),
+    }
+    # A signed-in device that names its endpoint learns whether the server holds it.
+    endpoint = request.headers.get("X-Push-Endpoint") or request.args.get("endpoint")
+    if body["enabled"] and endpoint and session.get("auth") and session.get("username"):
+        try:
+            profile = _get_user(session.get("username")) or {}
+            body["device_registered"] = any(
+                isinstance(s, dict) and s.get("endpoint") == endpoint
+                for s in (profile.get("push_subscriptions") or [])
+            )
+        except Exception:
+            app.logger.exception("push.config_lookup_failed")
+            body["device_registered"] = False
+    return jsonify(body)
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def push_subscribe():
+    err = require_auth()
+    if err:
+        return err
+    unavailable = _push_unavailable()
+    if unavailable:
+        return unavailable
+    username = session.get("username")
+    if not username or not _get_user(username):
+        return jsonify({"success": False, "error": "No user selected."}), 400
+    data = request.get_json(silent=True) or {}
+    subscription = push_notifications.validate_subscription(data.get("subscription"))
+    if subscription is None:
+        return jsonify({"success": False, "error": "That notification subscription is not valid."}), 400
+    # Only valid requests count: they are the ones that write profiles.
+    if _rate_limited(_push_subscribe_times, username, _PUSH_SUBSCRIBE_LIMIT):
+        return jsonify({"success": False, "error": "Too many requests. Try again in a few minutes."}), 429
+    try:
+        # Drop the device from every other account first, so a failure part-way
+        # leaves it with nobody rather than with the wrong person.
+        # Every subscribe removes the endpoint from other accounts, so an endpoint
+        # this user already holds is held by no one else: skip the all-profiles sweep.
+        already_mine = any(
+            isinstance(s, dict) and s.get("endpoint") == subscription["endpoint"]
+            for s in ((_get_user(username) or {}).get("push_subscriptions") or [])
+        )
+        if not already_mine:
+            push_notifications.remove_endpoint_from_others(subscription["endpoint"], username)
+        stored = push_notifications.add_subscription(username, subscription)
+    except Exception:
+        app.logger.exception("push.subscribe_failed")
+        return jsonify({"success": False, "error": "Could not turn on notifications. Please try again."}), 500
+    if not stored:
+        return jsonify({"success": False, "error": "No user selected."}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def push_unsubscribe():
+    err = require_auth()
+    if err:
+        return err
+    unavailable = _push_unavailable()
+    if unavailable:
+        return unavailable
+    username = session.get("username")
+    endpoint = (request.get_json(silent=True) or {}).get("endpoint")
+    if isinstance(endpoint, str) and username:
+        try:
+            push_notifications.remove_endpoint(username, endpoint)
+        except Exception:
+            app.logger.exception("push.unsubscribe_failed")
+            return jsonify({"success": False, "error": "Could not turn off notifications. Please try again."}), 500
+    return jsonify({"success": True})
+
+
+@app.route("/api/push/test", methods=["POST"])
+def push_test():
+    err = require_auth()
+    if err:
+        return err
+    unavailable = _push_unavailable()
+    if unavailable:
+        return unavailable
+    username = session.get("username")
+    if not username or not _get_user(username):
+        return jsonify({"success": False, "error": "No user selected."}), 400
+    if _push_test_rate_limited(username):
+        return jsonify({
+            "success": False, "sent": 0, "failed": 0,
+            "error": "Too many test notifications. Try again in a few minutes.",
+        }), 429
+    totals = push_notifications.send_to_users(
+        [username], push_notifications.device_test_payload(), push_notifications.BOOKING_TTL_SECONDS,
+    )
+    if totals["devices"] == 0:
+        return jsonify({
+            "success": False, "sent": 0, "failed": 0,
+            "error": "No devices are set up for notifications on this account.",
+        })
+    return jsonify({"success": totals["sent"] > 0, "sent": totals["sent"], "failed": totals["failed"]})
+
+
 @app.route("/api/logout", methods=["POST"])
 def logout():
+    # A device that signs out stops receiving this account's notifications.
+    # Nothing here may stop the sign-out itself.
+    try:
+        endpoint = (request.get_json(silent=True) or {}).get("push_endpoint")
+        username = session.get("username")
+        if isinstance(endpoint, str) and endpoint and username:
+            push_notifications.remove_endpoint(username, endpoint)
+    except Exception:
+        app.logger.exception("push.logout_cleanup_failed")
     session.clear()
     return jsonify({"ok": True})
 

@@ -385,6 +385,13 @@ class GolfService:
             self._active = None
             self._active_user = None
 
+    def release_session(self, tvn_username):
+        """Close and forget one user's pooled session if present. Other users'
+        sessions are never touched."""
+        if tvn_username in self._sessions:
+            self._drop_session(tvn_username)
+        return {"success": True}
+
     def _close_active(self):
         """Drop the session for the request currently being served."""
         if self._active_user:

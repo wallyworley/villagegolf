@@ -29,6 +29,7 @@ Core modules:
 - **`mapping_service.py`**, **`course_metadata.py`** — Sourced course catalog and bounded, read-only golf cart route provider. See `docs/MAPPING_SOURCES.md`.
 - **`preferences.py`**, **`user_store.py`** — Validated account preferences, favorites, home pin, and presets inside the encrypted profile. Use transactional `update_user` for partial edits.
 - **`request_watches.py`**, **`email_notifications.py`** — Persistent request checks and retried result notifications. Never infer a lottery assignment from date alone.
+- **`push_notifications.py`**, **`static/js/notify.js`**: Phone push notifications (booking and a reminder about 12 hours before the tee time, or 8 PM Eastern the evening before when that lands overnight). Subscriptions live in the encrypted profile as `push_subscriptions`; delivery uses the `notification_outbox` kinds `push_booking` and `push_reminder`. Only `success: true` bookings notify, and a reminder is verified against the booker's reservations before it sends. A booking delivers its own rows through `_send_outbox_rows`; a dedicated 60-second thread (`_send_push_outbox`) owns reminders, and the 900-second loop never touches push rows. Reminders never deliver between 9 PM and 7 AM Eastern. Push endpoints are validated by two URL parsers and sent with redirects disabled. Set `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, and `VAPID_SUBJECT` (see `DEPLOY.md`).
 - **`tests/`** — Deterministic tests with synthetic data and mocked upstream calls. Run `python -m unittest discover -s tests -v`. Never run live diagnostics as automated tests.
 
 ## User Flow
@@ -78,7 +79,8 @@ The automation navigates these pages in order:
 - `GET /api/my-tee-times` — List the current user's reservations
 - `POST /api/delete-reservation` — Delete a reservation
 - `POST /api/book` — Book a tee time
-- `POST /api/logout` — Clear session
+- `POST /api/logout`: Clear session (an optional JSON `push_endpoint` also removes that device's notification subscription)
+- Push APIs: `GET /api/push/config`, `POST /api/push/subscribe`, `POST /api/push/unsubscribe`, `POST /api/push/test`
 - `GET /api/courses` — Sourced course catalog
 - `GET/POST /api/preferences` — Account favorites, home, presets, and travel preferences
 - `POST /api/course-route` — Golf cart route preview from an explicit origin to a catalog course
