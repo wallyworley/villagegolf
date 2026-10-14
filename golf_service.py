@@ -1095,7 +1095,7 @@ class GolfService:
             if "glf109a" not in current_url:
                 return {
                     "success": False,
-                    "error": "Reservations page is no longer active. Please tap View My Tee Times again before deleting.",
+                    "error": "Reservations page is no longer active. Tap Refresh My Tee Times, then try deleting again.",
                 }
 
             # Parsing the page first proves this is a recognized reservations
@@ -1118,13 +1118,23 @@ class GolfService:
             # Step 2: the site shows a dedicated confirmation page. Stay on the
             # same live session/page and wait specifically for that page before
             # doing anything else. Do not re-login/re-navigate until after the
-            # final delete click has been attempted.
-            body_text = _normalize_space(page.inner_text("body"))
+            # final delete click has been attempted. The load-state waits above
+            # can return before the click's navigation starts, so wait for the
+            # confirmation text itself or the list page is read by mistake.
+            try:
+                page.locator(f"text=Delete Reservation No. {target}").first.wait_for(timeout=10000)
+            except PWTimeout:
+                pass  # the identity check below reports what the page showed
+            raw_body = page.inner_text("body")
+            body_text = _normalize_space(raw_body)
             confirm_match = re.search(
                 r"Delete\s+Reservation\s+No\.?\s*(\d+)", body_text, re.IGNORECASE
             )
             if not confirm_match or confirm_match.group(1) != target:
-                body_text = _normalize_space(page.inner_text("body"))
+                logger.warning(
+                    "delete: confirmation page did not identify reservation=%s user=%s page=%r",
+                    target, tvn_username, _site_reply_text(raw_body),
+                )
                 return {
                     "success": False,
                     "error": "The delete confirmation did not identify the requested reservation.",
@@ -1149,6 +1159,14 @@ class GolfService:
             submission_attempted = True
             confirm_target.click(timeout=5000, force=True)
 
+            # Same race as the first click: wait until the confirmation page is
+            # gone so reconciliation never navigates away mid-delete.
+            try:
+                page.locator(f"text=Delete Reservation No. {target}").first.wait_for(
+                    state="hidden", timeout=15000
+                )
+            except PWTimeout:
+                pass  # reconciliation below decides deleted, present, or unknown
             try:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:

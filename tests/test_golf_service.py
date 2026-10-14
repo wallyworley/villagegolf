@@ -211,6 +211,36 @@ class WrongDeleteConfirmationPage:
         return "Delete Reservation No. 999999"
 
 
+class SlowConfirmationPage(WrongDeleteConfirmationPage):
+    """The confirmation page appears only after the first click's navigation,
+    so a reader that does not wait for it sees the reservations list."""
+
+    def __init__(self):
+        super().__init__()
+        self.confirmation_shown = False
+        self.waited_states = []
+
+    def locator(self, selector, **kwargs):
+        if selector == "text=Delete Reservation No. 123456":
+            page = self
+
+            class ConfirmationText(DeleteLocator):
+                def wait_for(self, **kwargs):
+                    page.waited_states.append(kwargs.get("state", "visible"))
+                    page.confirmation_shown = kwargs.get("state") != "hidden"
+
+            return ConfirmationText()
+        return super().locator(selector, **kwargs)
+
+    def inner_text(self, _selector):
+        if self.confirmation_shown:
+            return "Delete Reservation No. 123456\nDELETE ALL PLAYERS ON THIS RESERVATION"
+        return "Reservation No. 123456\nDELETE ALL PLAYERS ON THIS RESERVATION"
+
+    def once(self, *_args):
+        pass
+
+
 class DeleteService(GolfService):
     def __init__(self, page):
         super().__init__()
@@ -445,6 +475,16 @@ console.log(JSON.stringify({
             result.stdout.strip(),
             '{"found":true,"exact":"566160","longer":null,"missing":false}',
         )
+
+    def test_reservation_delete_waits_for_the_confirmation_page(self):
+        page = SlowConfirmationPage()
+        service = DeleteService(page)
+        service._reconcile_reservation_absent = lambda *_args: (True, [])
+        result = service.delete_reservation("walter", "pw", "pin", "123456")
+        self.assertTrue(result["success"], result)
+        self.assertTrue(page.final_delete_requested)
+        self.assertEqual(page.waited_states, ["visible", "hidden"],
+                         "Wait for the confirmation page, then for it to go away after the final click.")
 
     def test_reservation_delete_rejects_confirmation_for_another_id(self):
         page = WrongDeleteConfirmationPage()
