@@ -561,6 +561,19 @@ const ANDROID_UA = %s;
             self.assertEqual(response.status_code, 200)
             self.assertIn('href="/"', response.get_data(as_text=True))
 
+    def test_sign_in_screens_explain_the_villages_credentials(self):
+        self.assertIn('id="sign-in-info"', self.get("/help").get_data(as_text=True))
+        banned = re.compile(r"\b(simply|just|easily|click|tap)\b", re.I)
+        for screen in ('id="login-screen"', 'id="reg-screen"'):
+            block = INDEX[INDEX.index(screen):]
+            block = block[:block.index("</details>")]
+            self.assertIn("<summary>What are these?</summary>", block)
+            self.assertIn("thevillages.net", block)
+            self.assertIn('href="/help#sign-in-info"', block)
+            text = visible_text(block[block.index('<details class="signin-help">'):])
+            self.assertNotIn(chr(0x2014), text)
+            self.assertIsNone(banned.search(text), screen)
+
     # 13
     def test_guide_images_exist_and_are_small(self):
         total = 0

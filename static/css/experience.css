@@ -228,6 +228,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 
 .exact-time-panel { margin-top:16px; padding:3px 13px; border:1px solid var(--gb); border-radius:12px; background:#fafaf5; }
 .exact-time-panel[open] { padding-bottom:13px; }
+.signin-help { margin:4px 0 12px; padding:3px 13px; border:1px solid var(--gb); border-radius:12px; background:var(--gl); }
+.signin-help[open] { padding-bottom:12px; }
+.signin-help > summary { min-height:44px; padding:9px 2px; color:var(--ink-accent); font-size:15px; font-weight:800; cursor:pointer; }
+.signin-help p { margin:0 0 8px; color:var(--text); font-size:15px; line-height:1.45; }
+.signin-help p:last-child { margin-bottom:0; }
+.signin-help a { color:var(--ink-accent); font-weight:750; }
 .time-window-fields { margin-top:4px; }
 .time-window-fields label { font-size:15px; color:var(--text); }
 .time-window-fields input { font-size:17px; }
