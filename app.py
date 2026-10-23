@@ -167,6 +167,11 @@ def _get_user(username):
     return user_store.get_user(username)
 
 
+def _canonical_username(username):
+    """The stored spelling of `username` ignoring case, or `username` when new."""
+    return user_store.find_username(username) or username
+
+
 def _set_user(username, data):
     user_store.set_user(username, data)
 
@@ -1391,7 +1396,7 @@ def get_session():
 def login_user():
     """Authenticate by TVN username + password + golf PIN, then set a session cookie."""
     data = request.get_json() or {}
-    username = (data.get("username") or "").strip()
+    username = _canonical_username((data.get("username") or "").strip())
     password = (data.get("password") or "").strip()
     golf_pin = (data.get("golf_pin") or "").strip()
 
@@ -1431,7 +1436,7 @@ def register_user():
     """Register a new user: login to Villages, fetch buddy list, cache profile."""
     request_id = _request_id()
     data = request.get_json() or {}
-    tvn_username = (data.get("username") or "").strip()
+    tvn_username = _canonical_username((data.get("username") or "").strip())
     tvn_password = (data.get("password") or "").strip()
     golf_password = (data.get("golf_pin") or "").strip()
 
@@ -1836,11 +1841,13 @@ def book_tee_time():
     if result.get("busy"):
         return jsonify(result), 409
     elapsed_ms = int((time.monotonic() - started) * 1000)
+    # A refusal is otherwise invisible in the log, so record its reason.
     app.logger.info(
-        "api.done request_id=%s action=book duration_ms=%s success=%s",
+        "api.done request_id=%s action=book duration_ms=%s success=%s%s",
         request_id,
         elapsed_ms,
         bool(result.get("success")),
+        "" if result.get("success") else f" error={result.get('error')!r}",
     )
 
     # Enqueue confirmation emails on success into the durable outbox

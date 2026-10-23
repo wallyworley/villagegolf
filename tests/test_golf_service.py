@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+import types
 import unittest
 from collections import OrderedDict
 from datetime import date
@@ -375,6 +376,124 @@ class GolfServiceTests(unittest.TestCase):
         )
         self.assertTrue(service.reconciled)
         self.assertTrue(result["unknown"])
+
+    def _buddy_list(self, header):
+        options = [{"value": "", "text": "Select a golfer"},
+                   {"value": "100002", "text": "Alice Able"},
+                   {"value": "100001", "text": "Walter Example"}]
+        select = types.SimpleNamespace(evaluate=lambda _script: options)
+        page = types.SimpleNamespace(
+            locator=lambda _selector: types.SimpleNamespace(all=lambda: [object(), object(), select]),
+            inner_text=lambda _selector: VILLAGES_HEADER.replace("Your ID is: 100001", header),
+        )
+
+        class BuddyService(GolfService):
+            def _get_or_create_session(self, _username):
+                return None, page
+
+            def _login(self, *_args):
+                pass
+
+            def _nav_to_glf109c(self, *_args, **_kwargs):
+                pass
+
+        return BuddyService().fetch_buddy_list("walter", "pw", "pin")
+
+    def test_primary_golfer_comes_from_the_page_header_not_the_first_option(self):
+        self.assertIn("Your ID is: 100001", VILLAGES_HEADER)
+        self.assertEqual(golf_service._own_golfer_id(VILLAGES_HEADER), "100001")
+        self.assertIsNone(golf_service._own_golfer_id("No header here"))
+        result = self._buddy_list("Your ID is: 100001")
+        self.assertEqual(result["primary"]["id"], "100001")
+        self.assertEqual([b["id"] for b in result["buddies"]], ["100002", "100001"])
+        missing = self._buddy_list("Your ID is: 100009")
+        self.assertEqual(missing["primary"]["id"], "100009")
+        self.assertEqual(missing["buddies"][0]["id"], "100009")
+        with self.assertLogs("golf_service", "WARNING"):
+            legacy = self._buddy_list("")
+        self.assertEqual(legacy["primary"]["id"], "100002")
+
+    def test_allocation_code_uses_the_nine_starting_hole(self):
+        # Course cells as glf109e shows them (captured October 23, 2026).
+        self.assertEqual(golf_service._allocation_code("Mallory Hill,\nVirginia/hole(10)", "10:08"), "100810")
+        self.assertEqual(golf_service._allocation_code("Hacienda Hills,\nPalms/hole(19)", "07:36"), "073619")
+        self.assertEqual(golf_service._allocation_code("Tierra Del Sol,\nFront Nine/hole(1)", "01:00"), "010001")
+        self.assertEqual(golf_service._allocation_code(
+            "Chula Vista (52)\nhole(1)\nLevel: 1 - Yardage: 1298-1507 yds", "07:47"), "074701")
+        self.assertEqual(golf_service._allocation_code("Southern Oaks", "02:05"), "020501")
+        self.assertEqual(golf_service._nine_name("Mallory Hill,\nVirginia/hole(10)"), "Virginia")
+        self.assertEqual(golf_service._nine_name("Mallory Hill, Virginia/hole(10)"), "Virginia")
+        self.assertEqual(golf_service._nine_name("Shallow Creek,\nhole(1)"), "")
+        self.assertEqual(golf_service._nine_name("Chula Vista (52)\nhole(1)\nLevel: 1"), "")
+
+    def _second_nine_page(self, allocation_rows):
+        page = DeclinedReplyPage(VILLAGES_HEADER + "No reservation number here.")
+        page.evaluated = []
+        page.evaluate = lambda _script, args=None: page.evaluated.append(args)
+        tee_row = FakeElement(attrs={"cells": [
+            FakeElement(child=page.link),
+            FakeElement("Mallory Hill,\nVirginia/hole(10)"),
+            FakeElement("10:08"),
+        ]})
+        page.query_selector_all = lambda _selector, calls=iter([[tee_row], allocation_rows]): next(calls)
+        context = {
+            "user": "walter", "date_str": "20261025", "play_date": "2026-10-25",
+            "date_label": "Sunday, Oct 25", "course_type": "Championship",
+            "golfer_ids": ["100001", "100002", "100003", "100004"], "num_golfers": 4, "has_guests": False,
+            "search_id": "search-1", "offered_times": [("Mallory Hill, - Virginia", "10:08")],
+            "preexisting_reservation_ids": set(),
+        }
+        return page, context
+
+    def _book_second_nine(self, page, context):
+        return DeclinedReplyService(page, context).book_tee_time(
+            "walter", "pw", "pin", "Mallory Hill, - Virginia", "10:08",
+            expected_date="20261025", expected_golfer_ids=["100001", "100002", "100003", "100004"],
+            expected_num_golfers=4, expected_course_type="Championship",
+            expected_has_guests=False, search_id="search-1",
+        )
+
+    def test_second_nine_booking_allocates_its_own_row(self):
+        first_nine = FakeElement("10:08 Lakes/hole 1 4", attrs={
+            "hidden": FakeElement(attrs={"value": "100801 "}),
+            "text_input": FakeElement(attrs={"name": "allo3"}),
+        })
+        virginia = FakeElement("10:08 Virginia/hole 1 4 8 Min - 18 holes straight", attrs={
+            "hidden": FakeElement(attrs={"value": "100810 "}),
+            "text_input": FakeElement(attrs={"name": "allo20"}),
+        })
+        page, context = self._second_nine_page([first_nine, virginia])
+        with self.assertLogs("golf_service", "WARNING"):
+            self._book_second_nine(page, context)
+        self.assertEqual(page.evaluated, [{"rowNum": 20, "numGolfers": 4}])
+        self.assertEqual(virginia.attrs["text_input"].filled, "4")
+        self.assertIsNone(first_nine.attrs["text_input"].filled)
+
+    def test_booking_refuses_when_its_nine_has_no_allocation_row(self):
+        first_nine = FakeElement("10:08 Lakes/hole 1 4", attrs={
+            "hidden": FakeElement(attrs={"value": "100801 "}),
+            "text_input": FakeElement(attrs={"name": "allo3"}),
+        })
+        page, context = self._second_nine_page([first_nine])
+        with self.assertLogs("golf_service", "WARNING") as logs:
+            result = self._book_second_nine(page, context)
+        self.assertFalse(result["success"])
+        self.assertNotIn("unknown", result)
+        self.assertEqual(page.evaluated, [])
+        self.assertIsNone(first_nine.attrs["text_input"].filled)
+        self.assertTrue(any("code=100810" in line and "100801" in line for line in logs.output))
+
+    def test_booking_refuses_a_matching_code_that_names_another_nine(self):
+        mislabeled = FakeElement("10:08 Lakes/hole 1 4", attrs={
+            "hidden": FakeElement(attrs={"value": "100810 "}),
+            "text_input": FakeElement(attrs={"name": "allo3"}),
+        })
+        page, context = self._second_nine_page([mislabeled])
+        with self.assertLogs("golf_service", "WARNING"):
+            result = self._book_second_nine(page, context)
+        self.assertFalse(result["success"])
+        self.assertEqual(page.evaluated, [])
+        self.assertIsNone(mislabeled.attrs["text_input"].filled)
 
     def test_site_reply_drops_the_shared_page_header(self):
         reply = golf_service._site_reply_text(

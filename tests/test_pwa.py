@@ -561,6 +561,11 @@ const ANDROID_UA = %s;
             self.assertEqual(response.status_code, 200)
             self.assertIn('href="/"', response.get_data(as_text=True))
 
+    def test_error_banner_scrolls_clear_of_the_status_bar(self):
+        show_error = INDEX[INDEX.index("function showError(msg){"):]
+        show_error = show_error[:show_error.index("\n")]
+        self.assertIn("block:'center'", show_error)
+
     def test_sign_in_screens_explain_the_villages_credentials(self):
         self.assertIn('id="sign-in-info"', self.get("/help").get_data(as_text=True))
         banned = re.compile(r"\b(simply|just|easily|click|tap)\b", re.I)

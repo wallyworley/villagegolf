@@ -462,7 +462,7 @@
       </details>
       <div class="reg-field">
         <label for="login-user-input">TVN Username</label>
-        <input id="login-user-input" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
+        <input id="login-user-input" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Your thevillages.net username"/>
       </div>
       <div class="reg-field">
         <label for="login-pass-input">TVN Password</label>
@@ -495,7 +495,7 @@
       </details>
       <div class="reg-field">
         <label for="reg-user">TVN Username</label>
-        <input id="reg-user" type="text" autocomplete="username" placeholder="Your thevillages.net username"/>
+        <input id="reg-user" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Your thevillages.net username"/>
       </div>
       <div class="reg-field">
         <label for="reg-pass">TVN Password</label>
@@ -1451,7 +1451,8 @@ async function saveEmail(){
   }catch(e){ status.textContent='Connection error'; status.style.color='var(--ink-error)'; }
 }
 
-function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth'});}else{b.textContent='';b.classList.remove('show');} }
+// Center the banner: aligned to the top, the installed iPhone app's status bar covers it.
+function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth',block:'center'});}else{b.textContent='';b.classList.remove('show');} }
 
 function resetApp(){
   S.date=null;S.dateLabel=null;S.golfers=[];S.course=null;S.regionFilter='all';S.guests=false;S.timeFilter=null;

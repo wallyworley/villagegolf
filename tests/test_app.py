@@ -67,6 +67,25 @@ class ApiTests(unittest.TestCase):
         value.update(changes)
         return value
 
+    def test_capitalized_username_reaches_the_existing_profile(self):
+        # Phones capitalize the first letter; the Villages login ignores case.
+        self.assertEqual(self.api.user_store.find_username("Golfer"), "golfer")
+        self.assertIsNone(self.api.user_store.find_username("nobody"))
+        client = self.api.app.test_client()
+        response = client.post("/api/login-user", json={"username": "Golfer", "password": "fixture", "golf_pin": "1234"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["username"], "golfer")
+        with client.session_transaction() as session:
+            self.assertEqual(session["username"], "golfer")
+        self.worker.call.return_value = {"success": True, "primary": {"id": "111", "name": "Test Golfer"},
+                                         "buddies": [{"id": "111", "name": "Test Golfer"}]}
+        response = client.post("/api/register", json={"username": "GOLFER", "password": "fixture", "golf_pin": "1234"})
+        self.assertEqual(response.get_json()["username"], "golfer")
+        self.assertEqual(self.worker.call.call_args.kwargs["tvn_username"], "golfer")
+        self.assertEqual(self.api.user_store.find_username("GOLFER"), "golfer")
+        self.assertEqual(sorted(self.api.user_store.all_users()), ["golfer"])
+        self.assertEqual(self.api.user_store.get_user("golfer")["email"], "fixture@example.invalid")
+
     def test_book_requires_search_identity(self):
         response = self.client.post("/api/book", json=self.booking(search_id=""))
         self.assertEqual(response.status_code, 400)

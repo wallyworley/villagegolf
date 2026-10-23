@@ -165,6 +165,25 @@ def get_user(username):
     return _decode(row[0])
 
 
+def find_username(username):
+    """Return the stored username that matches `username` ignoring case, or None.
+
+    Villages usernames are case-insensitive and phones capitalize the first
+    letter, so "Golfer" must reach the existing "golfer" profile instead of
+    creating a second one. An exact match wins when both spellings exist.
+    """
+    if not username:
+        return None
+    _ensure_schema()
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT username FROM users WHERE username = ? COLLATE NOCASE "
+            "ORDER BY username = ? DESC, username LIMIT 1",
+            (username, username),
+        ).fetchone()
+    return row[0] if row else None
+
+
 def set_user(username, data):
     """Insert or replace the profile for `username`."""
     if not username:

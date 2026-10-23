@@ -122,6 +122,33 @@ def _normalize_course_label(raw_text):
     return text.strip(" -")
 
 
+def _allocation_code(raw_course_text, time_str):
+    """Return the glf109y slot code for a glf109e row: HHMM plus the two-digit
+    starting hole from the course cell. "Virginia/hole(10)" is a second nine,
+    so its 10:08 slot is "100810". Executive courses and first nines show
+    hole(1), and a cell without a hole number keeps the long-standing "01".
+    """
+    match = re.search(r"hole\s*\(\s*(\d{1,2})\s*\)", str(raw_course_text or ""), flags=re.IGNORECASE)
+    hole = int(match.group(1)) if match else 1
+    return f"{str(time_str).replace(':', '')}{hole:02d}"
+
+
+def _nine_name(raw_course_text):
+    """Return the Championship nine named in a glf109e course cell, such as
+    "Virginia" in "Mallory Hill,\\nVirginia/hole(10)", or "" when there is none."""
+    match = re.search(r"([^\n/]+?)\s*/\s*hole\s*\(", str(raw_course_text or ""), flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(1).split(",")[-1].strip()
+
+
+def _own_golfer_id(page_text):
+    """Return the signed-in golfer's ID from the "Your ID is: 483204" line in
+    every Villages golf page header, or None when the line is missing."""
+    match = re.search(r"Your ID is:?\s*(\d+)", str(page_text or ""), flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
 def _clean_golfer_name(raw_name, golfer_id=None):
     """Strip trailing golfer ID from a Villages display name.
     e.g. 'Marcia Ann Worley 640405' → 'Marcia Ann Worley'"""
@@ -962,8 +989,16 @@ class GolfService:
                     clean_name = _clean_golfer_name(raw_text, value)
                     entry = {"id": value, "name": clean_name, "initials": _initials(clean_name)}
                     buddies.append(entry)
-                # First real option is the primary golfer (the logged-in user)
-                if buddies:
+                # The golfer list is alphabetical, so the signed-in golfer is the
+                # one the page header names ("Your ID is: 483204"), not option one.
+                own_id = _own_golfer_id(page.inner_text("body"))
+                primary = next((b for b in buddies if b["id"] == own_id), None)
+                if primary is None and own_id:
+                    name = f"Golfer #{own_id}"
+                    primary = {"id": own_id, "name": name, "initials": _initials(name)}
+                    buddies.insert(0, primary)
+                if primary is None and buddies:
+                    logger.warning("fetch_buddy_list: no golfer ID in the page header user=%s", tvn_username)
                     primary = buddies[0]
 
             return {"success": True, "primary": primary, "buddies": buddies}
@@ -1319,33 +1354,49 @@ class GolfService:
             # Click the course/time row on glf109e
             rows = page.query_selector_all("table tr")
             clicked = False
+            chosen_cell = ""
             for row in rows:
                 cells = row.query_selector_all("td")
                 if len(cells) < 3:
                     continue
-                course = _normalize_course_label(cells[1].inner_text())
+                raw_course = cells[1].inner_text()
+                course = _normalize_course_label(raw_course)
                 time   = cells[2].inner_text().strip()
                 if course_name == course and time == time_str:
                     link = cells[0].query_selector("a")
                     if link:
+                        chosen_cell = raw_course
                         link.click()
                         page.wait_for_url("**/glf109y**", timeout=10000)
                         clicked = True
                         break
 
             if not clicked:
+                logger.warning("book: tee time row not found on glf109e user=%s course=%s time=%s",
+                               tvn_username, course_name, time_str)
                 self._close_active()
-                return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
+                return {"success": False, "error": "Could not find that tee time. It may have just been taken."}
 
-            # Allocate golfers on glf109y and find the row number
-            site_time = f"{time_str.replace(':', '')}01"
+            # Allocate golfers on glf109y. The slot code is the time plus the
+            # nine's starting hole, so a course page that lists the same time
+            # once per nine still yields exactly the nine the golfer chose.
+            site_time = _allocation_code(chosen_cell, time_str)
+            nine = _nine_name(chosen_cell)
             alloc_row_num = None
+            codes_at_time = []
             table_rows = page.query_selector_all("table tr")
             for tr in table_rows:
                 hidden = tr.query_selector('input[type="hidden"]')
                 hidden_val = (hidden.get_attribute("value") or "").strip() if hidden else ""
                 text_input = tr.query_selector('input[type="Text"], input[type="text"]')
+                if hidden_val[:4] == site_time[:4]:
+                    codes_at_time.append(hidden_val)
                 if hidden_val == site_time and text_input:
+                    # Defense in depth: never fill a row that names another nine.
+                    if nine and nine.lower() not in (tr.inner_text() or "").lower():
+                        logger.warning("book: allocation row %s does not name the %s nine user=%s",
+                                       site_time, nine, tvn_username)
+                        break
                     text_input.fill(str(ctx.get("num_golfers", 1)))
                     # Extract row number from input name (e.g. "allo46" → 46)
                     allo_name = text_input.get_attribute("name") or ""
@@ -1353,8 +1404,12 @@ class GolfService:
                     break
 
             if alloc_row_num is None:
+                logger.warning(
+                    "book: no allocation row on glf109y user=%s course=%s time=%s code=%s codes_at_time=%s",
+                    tvn_username, course_name, time_str, site_time, codes_at_time[:6],
+                )
                 self._close_active()
-                return {"success": False, "error": "Could not find that tee time — it may have just been taken."}
+                return {"success": False, "error": "Could not find that tee time. It may have just been taken."}
 
             # Set the boundary before invoking submit: evaluate itself can fail
             # after the browser has already sent the form.
