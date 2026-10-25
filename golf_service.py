@@ -295,6 +295,64 @@ def _site_reply_text(body, limit=300):
     return text
 
 
+def _golfer_page_message(body_text, option_texts, row_messages):
+    """Return the Villages site's message from a golfer page it sent back in
+    place of tee times, or "" when the page carries none.
+
+    The site prints one message line directly above the "Enter N Golfers,
+    arranging them..." line. The dropdown option texts are also part of the
+    page text, so the walk up from that line stops at the first one.
+    """
+    lines = [_normalize_space(line) for line in str(body_text or "").splitlines()]
+    lines = [line for line in lines if line]
+    options = {_normalize_space(text) for text in (option_texts or [])}
+    options.discard("")
+
+    header = None
+    for index, line in enumerate(lines):
+        if re.match(r"Enter \d+ Golfers", line, re.IGNORECASE):
+            header = index
+            break
+
+    collected = []
+    if header is not None:
+        for line in reversed(lines[:header]):
+            if line in options or len(collected) >= 3:
+                break
+            collected.append(line)
+        collected.reverse()
+
+    for note in (row_messages or []):
+        note = _normalize_space(note)
+        if note and note not in collected:
+            collected.append(note)
+    return " ".join(collected)[:300]
+
+
+# State of the glf109c golfer form, read after Submit. The site answers a
+# rejected entry with this same form at a glf109e URL, so the form's presence
+# (not the URL) tells a rejection from a tee time list. Raw string, and no
+# regular expressions, so no backslash can be lost between Python and JavaScript.
+_GOLFER_FORM_STATE_JS = r"""() => ({
+    golferForm: !!document.querySelector('input[name="glfers1"]:not([type="hidden"])'),
+    options: Array.from(document.querySelectorAll('select option')).map(o => o.text || ''),
+    rowMessages: Array.from(document.querySelectorAll('[id^="col5txt"]')).map(d => d.innerText || ''),
+})"""
+
+# What the glf109c form will actually submit: the golfer ID in each row and the
+# page's own guest flag array (gst), read before the Submit click.
+_GOLFER_ROWS_STATE_JS = r"""(count) => {
+  const form = document.golfers;
+  const ids = [];
+  for (let i = 1; i <= count; i++) {
+    const field = form && form.elements['glfers' + i];
+    ids.push(field ? String(field.value || '').trim() : '');
+  }
+  const flags = (typeof gst !== 'undefined' && gst) ? Array.from(gst).slice(0, count).map(String) : null;
+  return {ids, flags};
+}"""
+
+
 def _timeout_error():
     return "The Villages golf site took too long to respond. Please try again."
 
@@ -856,6 +914,7 @@ class GolfService:
             "golfer_ids": list(ctx.get("golfer_ids") or []),
             "num_golfers": ctx.get("num_golfers"),
             "has_guests": ctx.get("has_guests"),
+            "guest_count": int(ctx.get("guest_count") or 0),
             "course_type": ctx.get("course_type"),
             "search_id": ctx.get("search_id"),
             "message": (
@@ -888,28 +947,118 @@ class GolfService:
         )
 
     def _setup_reservation(self, page, num_golfers, has_guests, course_type,
-                           golfer_ids, date_str, from_reservations_page=False):
+                           golfer_ids, date_str, from_reservations_page=False,
+                           guest_count=0):
+        """Fill glf109c and submit it. num_golfers counts the resident
+        golfers (it equals len(golfer_ids)); guests are extra rows under the
+        signed-in golfer's own ID. Every refusal happens before the Submit
+        click, so nothing is submitted for a group the page did not take."""
+        ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
+        try:
+            resident_count = int(num_golfers)
+        except (TypeError, ValueError):
+            resident_count = -1
+        if len(ids) != resident_count or not 1 <= len(ids) <= 4:
+            raise RuntimeError("Your golfers changed. Please search again.")
+        # The site's own redirect() accepts six-digit IDs from 100001 to 999990.
+        for gid in ids:
+            if not re.fullmatch(r"[0-9]{6}", gid) or not 100001 <= int(gid) <= 999990:
+                raise RuntimeError(
+                    f"Golfer ID {gid} isn't a valid Villages golfer ID. "
+                    "Check your golfer list, then search again."
+                )
+        if (not isinstance(guest_count, int) or isinstance(guest_count, bool)
+                or not 0 <= guest_count <= 3
+                or len(ids) + guest_count > 4
+                or bool(has_guests) != (guest_count > 0)):
+            raise RuntimeError("Your guests changed. Please search again.")
+
+        party = len(ids) + guest_count
         self._nav_to_glf109c(
-            page, num_golfers, has_guests, course_type,
+            page, party, guest_count > 0, course_type,
             from_reservations_page=from_reservations_page,
         )
 
-        # glf109c — first select = date, second = sort order, remaining = golfer slots
-        selects = page.locator("select").all()
-        selects[0].select_option(date_str)
-        selects[1].select_option(_SITE_SELECT_PLAY_TIME)
+        # Guests are listed under the signed-in golfer. The page header names
+        # that golfer; the stored profile is not trusted for it.
+        host = None
+        if guest_count > 0:
+            host = _own_golfer_id(page.inner_text("body"))
+            if not host:
+                raise RuntimeError(
+                    "We couldn't read your golfer ID from the Villages site, so "
+                    "guests can't be added. Please try again."
+                )
+            if host not in ids:
+                raise RuntimeError(
+                    "To bring guests, select yourself as one of the golfers. "
+                    "Guests are listed under your golfer ID."
+                )
+        rows = [(gid, False) for gid in ids] + [(host, True)] * guest_count
 
-        golfer_selects = selects[2:]
-        selected_ids = [str(g).strip() for g in (golfer_ids or []) if str(g).strip()]
+        # The page must have exactly one golfer row per player.
+        for n in range(1, party + 1):
+            if page.locator(f'input[name="glfers{n}"]').count() < 1:
+                raise RuntimeError("The Villages golfer page didn't match your group. Please search again.")
+        if page.locator(f'input[name="glfers{party + 1}"]').count() != 0:
+            raise RuntimeError("The Villages golfer page didn't match your group. Please search again.")
 
-        # Fill golfer slots in order so slot 1 is never skipped when num_golfers > 1.
-        for idx, golfer_select in enumerate(golfer_selects):
-            if idx >= len(selected_ids):
-                break
-            golfer_select.select_option(selected_ids[idx])
+        page.locator('select[name="playdate"]').select_option(date_str)
+        page.locator('select[name="reqcs"]').select_option(_SITE_SELECT_PLAY_TIME)
+
+        for n, (gid, is_guest) in enumerate(rows, start=1):
+            if guest_count > 0:
+                page.locator(f'input[name="guest{n}"][value="{"Y" if is_guest else "N"}"]').check()
+            # Choosing a buddy fires the page's own sel2inp, which copies the ID
+            # into the row. An ID missing from the list is typed into the row.
+            if page.locator(f'select[name="buddy{n}"] option[value="{gid}"]').count() > 0:
+                page.locator(f'select[name="buddy{n}"]').select_option(gid)
+            else:
+                page.locator(f'input[name="glfers{n}"]').fill(gid)
+
+        # Read back what the form will submit; a row that did not take must
+        # never reach the site as a different group.
+        expected_ids = [gid for gid, _ in rows]
+        expected_flags = ["Y" if is_guest else "N" for _, is_guest in rows]
+        state = page.evaluate(_GOLFER_ROWS_STATE_JS, party)
+        actual_ids = state.get("ids") if isinstance(state, dict) else None
+        actual_flags = state.get("flags") if isinstance(state, dict) else None
+        if guest_count > 0:
+            flags_match = actual_flags == expected_flags
+        else:
+            flags_match = actual_flags is None or (
+                isinstance(actual_flags, list) and all(flag == "N" for flag in actual_flags)
+            )
+        if actual_ids != expected_ids or not flags_match:
+            logger.warning(
+                "search: golfer rows did not take user=%s expected_ids=%s actual_ids=%s "
+                "expected_flags=%s actual_flags=%s",
+                self._active_user, expected_ids, actual_ids, expected_flags, actual_flags,
+            )
+            raise RuntimeError(
+                "We couldn't fill in every golfer on the Villages page. Please search again."
+            )
 
         page.locator('input[value="Submit"]').first.click()
         page.wait_for_url("**/glf109e**", timeout=15000)
+
+        # A rejected entry comes back as this same golfer form at a glf109e URL.
+        form_state = page.evaluate(_GOLFER_FORM_STATE_JS)
+        if isinstance(form_state, dict) and form_state.get("golferForm"):
+            message = _golfer_page_message(
+                page.inner_text("body"),
+                form_state.get("options") or [],
+                form_state.get("rowMessages") or [],
+            )
+            logger.warning(
+                "search: the Villages site sent the golfer page back user=%s message=%r",
+                self._active_user, message,
+            )
+            if message:
+                raise RuntimeError(f"The Villages site said: “{message}”")
+            raise RuntimeError(
+                "The Villages site didn't accept these golfers. Check your group and search again."
+            )
         self._active.ts = _time.time()
 
     def _extract_times(self, page, time_filter=None, region_filter=None):
@@ -1057,7 +1206,8 @@ class GolfService:
 
     def get_available_times(self, tvn_username, tvn_password, golf_password,
                             date_str, date_label, course_type, region_filter,
-                            golfer_ids, num_golfers, has_guests, time_filter=None):
+                            golfer_ids, num_golfers, has_guests, time_filter=None,
+                            guest_count=0):
         try:
             _, page = self._get_or_create_session(tvn_username)
             self._ensure_logged_in(page, tvn_username, tvn_password, golf_password)
@@ -1068,7 +1218,7 @@ class GolfService:
             preexisting_ids = self._capture_before_state(page, tvn_username)
             self._setup_reservation(
                 page, num_golfers, has_guests, course_type, golfer_ids, date_str,
-                from_reservations_page=True,
+                from_reservations_page=True, guest_count=guest_count,
             )
             times = self._extract_times(page, time_filter, region_filter)
             search_id = str(uuid.uuid4())
@@ -1082,6 +1232,7 @@ class GolfService:
                 "golfer_ids": [str(g).strip() for g in (golfer_ids or []) if str(g).strip()],
                 "num_golfers": int(num_golfers),
                 "has_guests": bool(has_guests),
+                "guest_count": int(guest_count),
                 "search_id": search_id,
                 "offered_times": [(t.get("course"), t.get("time")) for t in times],
                 "preexisting_reservation_ids": preexisting_ids,
@@ -1287,7 +1438,8 @@ class GolfService:
     def book_tee_time(self, tvn_username, tvn_password, golf_password, course_name, time_str,
                       expected_date=None, expected_golfer_ids=None,
                       expected_num_golfers=None, expected_course_type=None,
-                      expected_has_guests=None, search_id=None):
+                      expected_has_guests=None, search_id=None,
+                      expected_guest_count=None):
         submission_attempted = False
         page = None
         ctx = {}
@@ -1342,6 +1494,14 @@ class GolfService:
                     and bool(expected_has_guests) != bool(ctx.get("has_guests"))):
                 return {"success": False,
                         "error": "Your guest selection changed since you searched. Please fetch tee times again."}
+            if expected_guest_count is not None:
+                try:
+                    guests_match = int(expected_guest_count) == int(ctx.get("guest_count") or 0)
+                except (TypeError, ValueError):
+                    guests_match = False
+                if not guests_match:
+                    return {"success": False,
+                            "error": "Your guests changed since you searched. Please fetch tee times again."}
 
             offered = {
                 (str(course or ""), str(slot_time or ""))
@@ -1384,6 +1544,8 @@ class GolfService:
             nine = _nine_name(chosen_cell)
             alloc_row_num = None
             codes_at_time = []
+            # The whole party (residents and guests) goes in the allocation.
+            party = int(ctx.get("num_golfers") or 1) + int(ctx.get("guest_count") or 0)
             table_rows = page.query_selector_all("table tr")
             for tr in table_rows:
                 hidden = tr.query_selector('input[type="hidden"]')
@@ -1397,7 +1559,7 @@ class GolfService:
                         logger.warning("book: allocation row %s does not name the %s nine user=%s",
                                        site_time, nine, tvn_username)
                         break
-                    text_input.fill(str(ctx.get("num_golfers", 1)))
+                    text_input.fill(str(party))
                     # Extract row number from input name (e.g. "allo46" → 46)
                     allo_name = text_input.get_attribute("name") or ""
                     alloc_row_num = int(allo_name.replace("allo", ""))
@@ -1424,7 +1586,7 @@ class GolfService:
                     form.availw.value = 'x';
                     form.submit();
                 }""",
-                {"rowNum": alloc_row_num, "numGolfers": ctx.get("num_golfers", 1)},
+                {"rowNum": alloc_row_num, "numGolfers": party},
             )
             # The form is now submitted. Everything below is confirmation, NOT
             # commit \u2014 so a timeout or a differently-worded confirmation page

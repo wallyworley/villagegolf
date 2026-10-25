@@ -893,7 +893,38 @@ function exactTimeChanged(){
   clearResults(); checkFetch();
 }
 
-function guestChanged(checked){ S.guests=!!checked; clearResults(); checkFetch(); }
+// Guests are listed under the signed-in golfer, so a group of four has room for none.
+function guestLimit(){ return Math.max(0, Math.min(3, 4 - S.golfers.length)); }
+function renderGuestStepper(){
+  document.getElementById('guestCount').textContent=String(S.guestCount);
+  // Screen readers hear the count only when it changes.
+  const spoken=document.getElementById('guestCountSpoken');
+  const words=S.guestCount<=0?'No guests':(S.guestCount===1?'1 guest':S.guestCount+' guests');
+  if(spoken&&spoken.textContent!==words) spoken.textContent=words;
+  // interface.js disables every control in a locked section and re-enables only the ones it
+  // tagged, so a button that must stay off after unlock is left untagged.
+  const section=document.getElementById('sec-course');
+  const locked=!!section&&section.classList.contains('dim');
+  [[document.getElementById('guestMinus'),S.guestCount<=0],[document.getElementById('guestPlus'),S.guestCount>=guestLimit()]].forEach(([button,off])=>{
+    if(locked){
+      button.disabled=true;
+      if(off) delete button.dataset.progressiveDisabled; else button.dataset.progressiveDisabled='true';
+    }else{
+      button.disabled=off;
+      delete button.dataset.progressiveDisabled;
+    }
+  });
+}
+function changeGuests(delta){
+  const next=Math.max(0,Math.min(guestLimit(),S.guestCount+delta));
+  if(next!==S.guestCount){ S.guestCount=next; clearResults(); checkFetch(); }
+  renderGuestStepper();
+}
+// Call after the golfer list changes: guests plus golfers never exceed four players.
+function syncGuestLimit(){
+  if(S.guestCount>guestLimit()){ S.guestCount=guestLimit(); clearResults(); }
+  renderGuestStepper();
+}
 
 const baseClearResults=clearResults;
 clearResults=function enhancedClearResults(){
@@ -914,7 +945,7 @@ function teeSearchPayload(){
   const from=document.getElementById('search-time-from')?.value||'';
   const to=document.getElementById('search-time-to')?.value||'';
   return {date:S.date,date_label:S.dateLabel,course_type:S.course,region_filter:S.regionFilter,
-    golfer_ids:[...S.golfers],num_golfers:S.golfers.length,has_guests:S.guests,time_filter:S.timeFilter,
+    golfer_ids:[...S.golfers],num_golfers:S.golfers.length,guest_count:S.guestCount,time_filter:S.timeFilter,
     time_from:from||'',time_to:to||''};
 }
 
@@ -992,7 +1023,7 @@ openConfirm=function enhancedOpenConfirm(item){
   S.pendingCourse=item.course; S.pendingTime=item.time; S.pendingDisplay=item.display_time;
   EXPERIENCE.pendingSnapshot=Object.freeze({...current,golfer_ids:Object.freeze([...current.golfer_ids]),course:item.course,time:item.time,search_id:EXPERIENCE.searchId});
   const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name.split(' ')[0]||id)).join(', ');
-  document.getElementById('cs-detail').innerHTML=`<div class="cs-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="cs-row"><span>Time</span><span>${esc(item.display_time)}</span></div><div class="cs-row"><span>Course</span><span>${esc(item.course)}</span></div><div class="cs-row"><span>Golfers</span><span>${names}</span></div><div class="cs-row"><span>Guests</span><span>${S.guests?'Yes':'No'}</span></div><div class="location-actions">${locationButton(item.course,'Course details & route')}</div>`;
+  document.getElementById('cs-detail').innerHTML=`<div class="cs-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="cs-row"><span>Time</span><span>${esc(item.display_time)}</span></div><div class="cs-row"><span>Course</span><span>${esc(item.course)}</span></div><div class="cs-row"><span>Golfers</span><span>${names}</span></div><div class="cs-row"><span>Guests</span><span>${S.guestCount?(S.guestCount===1?'1 guest':S.guestCount+' guests'):'None'}</span></div><div class="location-actions">${locationButton(item.course,'Course details & route')}</div>`;
   const overlay=document.getElementById('overlay'); overlay.classList.add('show'); overlay.querySelector('.confirm-sheet').setAttribute('role','dialog'); overlay.querySelector('.confirm-sheet').setAttribute('aria-modal','true');
   document.getElementById('cs-book-btn').disabled=false; document.getElementById('cs-book-btn').textContent='Book It!';
 };
@@ -1372,6 +1403,7 @@ function applySelectedPreset(){
   const index=document.getElementById('preset-select').value,p=EXPERIENCE.preferences.presets[Number(index)];if(index===''||!p)return;
   if(p.course_type) setCourse(p.course_type);
   S.golfers=(p.golfer_ids||[]).filter(id=>BUDDIES.some(b=>b.id===id));
+  syncGuestLimit();
   document.querySelectorAll('#golferList .g-card').forEach(card=>{const selected=S.golfers.includes(card.dataset.id);card.classList.toggle('on',selected);card.setAttribute('aria-pressed',String(selected));});
   document.getElementById('search-time-from').value=p.time_from||'';document.getElementById('search-time-to').value=p.time_to||'';
   if(S.golfers.length) unlock('sec-course');clearResults();checkFetch();showAppView('book');

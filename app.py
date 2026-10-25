@@ -905,10 +905,17 @@ def _parse_booking_inputs(data, require_course_time=False):
         return None, "Select between 1 and 4 golfers."
     if num_golfers != len(golfer_ids):
         return None, "Number of golfers must match selected golfers."
-    if len(set(golfer_ids)) != len(golfer_ids) or any(not re.fullmatch(r"\d{1,20}", g) for g in golfer_ids):
+    if len(set(golfer_ids)) != len(golfer_ids) or any(not re.fullmatch(r"[0-9]{1,20}", g) for g in golfer_ids):
         return None, "Select distinct, valid golfer IDs."
     if not isinstance(data.get("has_guests", False), bool):
         return None, "Guest selection must be yes or no."
+    guest_count = data.get("guest_count", 0)
+    if not (isinstance(guest_count, int) and not isinstance(guest_count, bool) and 0 <= guest_count <= 3):
+        return None, "Choose between 0 and 3 guests."
+    if "has_guests" in data and bool(data["has_guests"]) != (guest_count > 0):
+        return None, "Refresh the page, then choose your guests again."
+    if num_golfers + guest_count > 4:
+        return None, "A group can have at most 4 players, including guests."
     start, end = data.get("time_from", ""), data.get("time_to", "")
     if any(t and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", t) for t in (start, end)):
         return None, "Use HH:MM for the time window."
@@ -926,7 +933,8 @@ def _parse_booking_inputs(data, require_course_time=False):
         "region_filter": region_filter,
         "golfer_ids": golfer_ids,
         "num_golfers": num_golfers,
-        "has_guests": bool(data.get("has_guests", False)),
+        "has_guests": guest_count > 0,
+        "guest_count": guest_count,
         "time_from": start, "time_to": end,
     }
 
@@ -1043,6 +1051,11 @@ def _booking_recipients(golfer_ids, booking_result, course_name, booking_usernam
         "reservation_no": res_no, "course": course_name, "display_time": display_time,
         "date_label": date_label, "golfer_names": golfer_names,
     }
+    # Only guest bookings carry guest_count, so a rollback to code without that
+    # parameter can fail only those confirmations, never every queued one.
+    guest_count = int(booking_result.get("guest_count") or 0)
+    if guest_count > 0:
+        payload["guest_count"] = guest_count
 
     recipients = []
     seen_emails = set()
@@ -1657,12 +1670,18 @@ def get_tee_times():
         return jsonify({"success": False, "error": parse_err}), 400
 
     app.logger.info(
-        "api.start request_id=%s action=tee_times user=%s date=%s course_type=%s num_golfers=%s",
+        "api.start request_id=%s action=tee_times user=%s date=%s course_type=%s num_golfers=%s guests=%s "
+        "time_filter=%r region=%s window=%s-%s",
         request_id,
         username,
         parsed["date_str"],
         parsed["course_type"],
         parsed["num_golfers"],
+        parsed["guest_count"],
+        data.get("time_filter"),
+        parsed["region_filter"],
+        parsed["time_from"],
+        parsed["time_to"],
     )
     result = get_worker().call(
         "get_available_times",
@@ -1678,6 +1697,7 @@ def get_tee_times():
         golfer_ids   = parsed["golfer_ids"],
         num_golfers  = parsed["num_golfers"],
         has_guests   = parsed["has_guests"],
+        guest_count  = parsed["guest_count"],
         time_filter  = data.get("time_filter"),
     )
     if result.get("success") and (parsed["time_from"] or parsed["time_to"]):
@@ -1815,11 +1835,12 @@ def book_tee_time():
     course_name, time_str = parsed["course_name"], parsed["time_str"]
 
     app.logger.info(
-        "api.start request_id=%s action=book user=%s course=%s time=%s",
+        "api.start request_id=%s action=book user=%s course=%s time=%s guests=%s",
         request_id,
         username,
         course_name,
         time_str,
+        parsed["guest_count"],
     )
     result = get_worker().call(
         "book_tee_time",
@@ -1835,6 +1856,7 @@ def book_tee_time():
         expected_num_golfers=parsed["num_golfers"],
         expected_course_type=parsed["course_type"],
         expected_has_guests=parsed["has_guests"],
+        expected_guest_count=parsed["guest_count"],
         search_id=search_id,
         exclusive_key=username,
     )

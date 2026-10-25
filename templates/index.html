@@ -599,8 +599,13 @@
       </button>
     </div>
     <div class="tog-row">
-      <div class="tog-lbl">Any guests?<small>Non-resident players</small></div>
-      <label class="sw"><input type="checkbox" id="guestTog" onchange="guestChanged(this.checked)"/><span class="sw-track"></span></label>
+      <div class="tog-lbl">Guests<small id="guestHelp">Listed under your golfer ID, so include yourself. A group has at most 4 players.</small></div>
+      <div class="guest-stepper" role="group" aria-label="Number of guests" aria-describedby="guestHelp">
+        <button type="button" class="step-btn" id="guestMinus" onclick="changeGuests(-1)" aria-label="Remove a guest" disabled>&minus;</button>
+        <span class="step-val" id="guestCount">0</span>
+        <button type="button" class="step-btn" id="guestPlus" onclick="changeGuests(1)" aria-label="Add a guest">+</button>
+        <span class="visually-hidden" id="guestCountSpoken" aria-live="polite">No guests</span>
+      </div>
     </div>
   </div>
 
@@ -920,7 +925,7 @@ function esc(s){ const d=document.createElement('div'); d.textContent=String(s);
 
 // ── State ──
 let BUDDIES = [];  // populated from server after login
-const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guests:false,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'',allTimes:[],courseFilter:'all' };
+const S = { date:null,dateLabel:null,golfers:[],course:null,regionFilter:'all',guestCount:0,timeFilter:null,pendingCourse:null,pendingTime:null,pendingDisplay:null,email:'',allTimes:[],courseFilter:'all' };
 let MY_TEE_TIMES = [];
 let DELETE_PENDING = null;
 const SR = { date:null,maxGolfers:null,course:null,guests:false,anyCourse:false,timeToPlay:'',earliest:'',latest:'',preference:'Course',availableCourses:[],closedCourses:[],selectedCourses:[],golfers:[],courseSearch:'' };
@@ -1270,9 +1275,10 @@ function buildGolfers(){
   BUDDIES.forEach(g=>{
     const c=document.createElement('button'); c.type='button'; c.className='g-card'; c.dataset.id=g.id; c.setAttribute('aria-pressed','false');
     c.innerHTML=`<div class="g-av">${esc(g.initials||'?')}</div><div><div class="g-name">${esc(g.name)}</div><div class="g-id">ID ${esc(g.id)}</div></div><div class="g-chk">&#10003;</div>`;
-    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); c.setAttribute('aria-pressed',String(S.golfers.includes(g.id))); clearResults(); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
+    c.onclick=()=>{ c.classList.toggle('on'); if(S.golfers.includes(g.id)) S.golfers=S.golfers.filter(x=>x!==g.id); else S.golfers.push(g.id); c.setAttribute('aria-pressed',String(S.golfers.includes(g.id))); clearResults(); if(typeof syncGuestLimit==='function') syncGuestLimit(); if(S.golfers.length>0) unlock('sec-course'); checkFetch(); };
     list.appendChild(c);
   });
+  if(typeof syncGuestLimit==='function') syncGuestLimit();
 }
 
 function selectDateOffset(offset){
@@ -1339,7 +1345,7 @@ async function fetchTimes(){
   const msgs=['Logging in to The Villages\u2026','Navigating to golf system\u2026','Fetching available tee times\u2026','Almost there\u2026'];
   let mi=0; const iv=setInterval(()=>{ if(mi<msgs.length-1) ltxt.textContent=msgs[++mi]; },3500);
   try{
-    const r=await fetch('/api/tee-times',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,region_filter:S.regionFilter,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,time_filter:S.timeFilter})});
+    const r=await fetch('/api/tee-times',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,region_filter:S.regionFilter,golfer_ids:S.golfers,num_golfers:S.golfers.length,guest_count:S.guestCount,time_filter:S.timeFilter})});
     const d=await r.json();
     clearInterval(iv); loader.style.display='none';
     if(!d.success){ showError(d.error||'Failed to fetch tee times.'); return; }
@@ -1381,7 +1387,7 @@ function renderTimeRows(){
 function openConfirm(t){
   S.pendingCourse=t.course; S.pendingTime=t.time; S.pendingDisplay=t.display_time;
   const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name.split(' ')[0]||id)).join(', ');
-  document.getElementById('cs-detail').innerHTML=`<div class="cs-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="cs-row"><span>Time</span><span>${esc(t.display_time)}</span></div><div class="cs-row"><span>Course</span><span>${esc(t.course)}</span></div><div class="cs-row"><span>Golfers</span><span>${names}</span></div><div class="cs-row"><span>Guests</span><span>${S.guests?'Yes':'No'}</span></div>`;
+  document.getElementById('cs-detail').innerHTML=`<div class="cs-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="cs-row"><span>Time</span><span>${esc(t.display_time)}</span></div><div class="cs-row"><span>Course</span><span>${esc(t.course)}</span></div><div class="cs-row"><span>Golfers</span><span>${names}</span></div><div class="cs-row"><span>Guests</span><span>${S.guestCount?(S.guestCount===1?'1 guest':S.guestCount+' guests'):'None'}</span></div>`;
   document.getElementById('overlay').classList.add('show');
   document.getElementById('cs-book-btn').disabled=false;
   document.getElementById('cs-book-btn').textContent='\u26F3 Book It!';
@@ -1398,7 +1404,7 @@ async function confirmBook(){
   const bmsgs=['Reserving your tee time\u2026','Still working \u2014 please wait\u2026','Confirming with The Villages\u2026'];
   let bi=0; const biv=setInterval(()=>{ if(bi<bmsgs.length-1) btn.textContent=bmsgs[++bi]; },8000);
   try{
-    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,has_guests:S.guests,course:S.pendingCourse,time:S.pendingTime})});
+    const r=await fetch('/api/book',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,body:JSON.stringify({date:S.date,date_label:S.dateLabel,course_type:S.course,golfer_ids:S.golfers,num_golfers:S.golfers.length,guest_count:S.guestCount,course:S.pendingCourse,time:S.pendingTime})});
     const d=await r.json(); closeConfirm();
     if(!d.success){
       // Server couldn't confirm the booking committed \u2014 route to My Tee Times.
@@ -1423,7 +1429,9 @@ function showSuccess(d){
   const sec=document.getElementById('success-sec'); sec.style.display='block';
   document.getElementById('success-sub').textContent=`Reservation #${d.reservation_no} confirmed`;
   const names=S.golfers.map(id=>esc(BUDDIES.find(g=>g.id===id)?.name||id)).join('<br>');
-  document.getElementById('conf-card').innerHTML=`<div class="conf-row"><span>Reservation #</span><span>${esc(d.reservation_no)}</span></div><div class="conf-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="conf-row"><span>Time</span><span>${esc(d.display_time)}</span></div><div class="conf-row"><span>Course</span><span>${esc(d.course)}</span></div><div class="conf-row"><span>Golfers</span><span>${names}</span></div>`;
+  const guestTotal=Number(d.guest_count);
+  const guests=guestTotal>0?`<div class="conf-row"><span>Guests</span><span>${guestTotal===1?'1 guest':guestTotal+' guests'}</span></div>`:'';
+  document.getElementById('conf-card').innerHTML=`<div class="conf-row"><span>Reservation #</span><span>${esc(d.reservation_no)}</span></div><div class="conf-row"><span>Date</span><span>${esc(S.dateLabel)}</span></div><div class="conf-row"><span>Time</span><span>${esc(d.display_time)}</span></div><div class="conf-row"><span>Course</span><span>${esc(d.course)}</span></div><div class="conf-row"><span>Golfers</span><span>${names}</span></div>${guests}`;
   sec.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
@@ -1455,12 +1463,12 @@ async function saveEmail(){
 function showError(msg){ const b=document.getElementById('errBanner'); if(msg){b.textContent='\u26A0\uFE0F '+msg;b.classList.add('show');b.scrollIntoView({behavior:'smooth',block:'center'});}else{b.textContent='';b.classList.remove('show');} }
 
 function resetApp(){
-  S.date=null;S.dateLabel=null;S.golfers=[];S.course=null;S.regionFilter='all';S.guests=false;S.timeFilter=null;
+  S.date=null;S.dateLabel=null;S.golfers=[];S.course=null;S.regionFilter='all';S.guestCount=0;S.timeFilter=null;
   document.querySelectorAll('.d-card,.g-card,.t-tile').forEach(x=>x.classList.remove('on'));
   document.getElementById('t-exec').classList.remove('on');
   document.getElementById('t-champ').classList.remove('on');
   ['all','north-of-466','between-the-6s','south-of-466a','south-of-turnpike'].forEach(r=>document.getElementById('r-'+r).classList.toggle('on',r==='all'));
-  document.getElementById('guestTog').checked=false;
+  if(typeof renderGuestStepper==='function') renderGuestStepper();
   ['sec-golfers','sec-course','sec-time','sec-fetch'].forEach(id=>document.getElementById(id).classList.add('dim'));
   document.getElementById('results-sec').style.display='none';
   document.getElementById('success-sec').style.display='none';

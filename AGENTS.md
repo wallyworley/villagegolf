@@ -55,7 +55,8 @@ The automation navigates these pages in order:
 ## Key Implementation Details
 
 - All selected golfers must be placed in the upstream form; never silently omit one. Group size is 1–4.
-- Every booking requires the `search_id` returned by its successful search plus matching date, golfers, course type, and guest setting. Changes invalidate results.
+- Every booking requires the `search_id` returned by its successful search plus matching date, golfers, course type, and guest count. Changes invalidate results.
+- Guests are always listed under the signed-in golfer: each guest row on glf109c is the golfer's own ID (from the page's "Your ID is" header) with Guest? Yes. When the site sends the golfer page back at the glf109e URL, the app shows the site's message instead of an empty list.
 - Once a mutation may have been submitted, errors mean `unknown` until reconciled; never invite a blind retry or claim an unverified deletion.
 - **`_SITE_SELECT_PLAY_TIME = "98"`** is the option value for "View by Play Time" on glf109c.
 - **`_COURSE_TYPE_CODES`**: `{"Championship": "01", "Executive": "02"}`.

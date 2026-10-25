@@ -52,6 +52,7 @@ def main():
         def call(self, method, **kwargs):
             if method == "get_available_times":
                 self.context = dict(kwargs)
+                self.context["guest_count"] = kwargs.get("guest_count", 0)
                 self.search_id = "preview-" + uuid4().hex
                 candidates = [
                     {"course": "Silver Lake", "course_name": "Silver Lake", "time": "08:15", "display_time": "8:15 AM", "available": "4"},
@@ -78,7 +79,8 @@ def main():
                 matches = kwargs.get("search_id") == self.search_id and self.search_id is not None
                 for expected, actual in (("expected_date", "date_str"), ("expected_golfer_ids", "golfer_ids"),
                                          ("expected_num_golfers", "num_golfers"), ("expected_course_type", "course_type"),
-                                         ("expected_has_guests", "has_guests")):
+                                         ("expected_has_guests", "has_guests"),
+                                         ("expected_guest_count", "guest_count")):
                     matches = matches and kwargs.get(expected) == self.context.get(actual)
                 matches = matches and any(row["course_name"] == kwargs["course_name"] and row["time"] == kwargs["time_str"] for row in self.times)
                 if not matches:
@@ -91,7 +93,7 @@ def main():
                         "display_time": _display_time(kwargs["time_str"]), "play_date": date.isoformat(), "date": self.context["date_str"],
                         "date_label": self.context["date_label"], "golfer_ids": self.context["golfer_ids"],
                         "course_type": self.context["course_type"], "has_guests": self.context["has_guests"],
-                        "num_golfers": self.context["num_golfers"]}
+                        "guest_count": self.context["guest_count"], "num_golfers": self.context["num_golfers"]}
                 reservations.append({**result, "date": date.strftime("%A: %-m/%-d"),
                                      "actions": ["DELETE ALL PLAYERS ON THIS RESERVATION"]})
                 return result

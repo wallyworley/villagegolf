@@ -82,7 +82,7 @@ const context = {
     querySelector(){return element();},querySelectorAll(){return [];},createElement:element,
     addEventListener(){},contains(){return true;},body:element(),activeElement:element()},
   window:{addEventListener(){},isSecureContext:true}, navigator:{},
-  S:{date:'20260912',dateLabel:'Saturday',course:'Executive',regionFilter:'all',golfers:['111'],guests:false,timeFilter:'all'},
+  S:{date:'20260912',dateLabel:'Saturday',course:'Executive',regionFilter:'all',golfers:['111'],guestCount:0,timeFilter:'all'},
   SR:{}, BUDDIES:[{id:'111',name:'Preview Golfer'}], BOOKING_IN_FLIGHT:false, MY_TEE_TIMES:[],
   _wxCache:null, WX_LABELS:{}, esc:value=>String(value??''), baseCalls:{},
   closeConfirm(){}, showError(message){context.lastError=message;}, checkFetch(){},
@@ -110,6 +110,196 @@ S.golfers.push('222');
 await confirmBook();
 assert.equal(submissions,0,'A changed group must require a fresh search, not book the reviewed time.');
 assert.match(lastError,/choices changed/i);
+""")
+
+    def test_guest_count_is_capped_by_the_group_size(self):
+        self.run_behavior("""
+const count=document.getElementById('guestCount'), minus=document.getElementById('guestMinus'), plus=document.getElementById('guestPlus');
+S.golfers=['111','222','333'];
+changeGuests(1);
+assert.equal(S.guestCount,1);
+assert.equal(count.textContent,'1');
+assert.equal(minus.disabled,false);
+assert.equal(plus.disabled,true,'Three golfers leave room for only one guest.');
+changeGuests(1);
+assert.equal(S.guestCount,1,'A fourth player is the most a group can hold.');
+S.golfers.push('444');
+syncGuestLimit();
+assert.equal(S.guestCount,0,'Adding a fourth golfer must drop the guest.');
+assert.equal(count.textContent,'0');
+assert.equal(plus.disabled,true);
+assert.equal(minus.disabled,true);
+changeGuests(1);
+assert.equal(S.guestCount,0,'A group of four cannot add a guest.');
+changeGuests(-1);
+assert.equal(S.guestCount,0,'The count never goes below zero.');
+S.golfers=['111'];
+syncGuestLimit();
+assert.equal(plus.disabled,false);
+for(let i=0;i<5;i++) changeGuests(1);
+assert.equal(S.guestCount,3,'No group can bring more than three guests.');
+""")
+
+    def test_guest_change_requires_a_fresh_search(self):
+        self.run_behavior("""
+let submissions=0;
+jsonRequest=async()=>{submissions++;return {success:true};};
+const detail=document.getElementById('cs-detail');
+EXPERIENCE.searchId='fixture-search';
+EXPERIENCE.searchSnapshot=JSON.stringify(teeSearchPayload());
+openConfirm({course:'Silver Lake',time:'08:15',display_time:'8:15 AM'});
+assert.match(detail.innerHTML,/Guests<\\/span><span>None</);
+changeGuests(1);
+await confirmBook();
+assert.equal(submissions,0,'A changed guest count must require a fresh search, not book the reviewed time.');
+assert.match(lastError,/choices changed/i);
+
+changeGuests(1);
+EXPERIENCE.searchId='second-search';
+EXPERIENCE.searchSnapshot=JSON.stringify(teeSearchPayload());
+openConfirm({course:'Silver Lake',time:'08:15',display_time:'8:15 AM'});
+assert.match(detail.innerHTML,/Guests<\\/span><span>2 guests</);
+globalThis.lastError='';
+S.guestCount=1;
+await confirmBook();
+assert.equal(submissions,0,'Even a count changed without clearing the results must not book.');
+assert.match(lastError,/choices changed/i);
+
+S.guestCount=1;
+EXPERIENCE.searchSnapshot=JSON.stringify(teeSearchPayload());
+openConfirm({course:'Silver Lake',time:'08:15',display_time:'8:15 AM'});
+assert.match(detail.innerHTML,/Guests<\\/span><span>1 guest</);
+""")
+
+    def test_search_payload_sends_guest_count_only(self):
+        self.run_behavior("""
+S.guestCount=2;
+const payload=teeSearchPayload();
+assert.equal(payload.guest_count,2);
+assert.equal('has_guests' in payload,false,'The server derives has_guests from the count.');
+EXPERIENCE.searchId='fixture-search';
+EXPERIENCE.searchSnapshot=JSON.stringify(payload);
+openConfirm({course:'Silver Lake',time:'08:15',display_time:'8:15 AM'});
+assert.equal(EXPERIENCE.pendingSnapshot.guest_count,2,'The booking request must carry the reviewed guest count.');
+assert.equal('has_guests' in EXPERIENCE.pendingSnapshot,false);
+""")
+
+    def test_old_guest_switch_is_gone(self):
+        parser = _IdsAndAssets()
+        parser.feed(INDEX)
+        self.assertNotIn("guestTog", INDEX)
+        self.assertNotIn("guestTog", EXPERIENCE_JS)
+        self.assertLessEqual({"guestMinus", "guestCount", "guestPlus"}, parser.ids)
+        for source in (INDEX, EXPERIENCE_JS):
+            self.assertNotIn("S.guests", source)
+            self.assertNotIn("guestChanged", source)
+        self.assertIn('onclick="changeGuests(-1)"', INDEX)
+        self.assertIn('onclick="changeGuests(1)"', INDEX)
+        self.assertIn("rq-guests", INDEX, "The Advance Requests guest switch is out of scope.")
+        for rule in (".guest-stepper", ".step-btn", ".step-val"):
+            self.assertIn(rule, EXPERIENCE_CSS)
+
+    def test_guest_stepper_respects_the_section_lock(self):
+        self.run_behavior("""
+const section=document.getElementById('sec-course');
+const minus=document.getElementById('guestMinus'), plus=document.getElementById('guestPlus');
+section.classList.add('dim');
+S.golfers=['111','222','333','444'];
+renderGuestStepper();
+assert.equal(plus.disabled,true);
+assert.equal(plus.dataset.progressiveDisabled,undefined,'A button that must stay off after unlock is not tagged for re-enabling.');
+assert.equal(minus.disabled,true);
+assert.equal(minus.dataset.progressiveDisabled,undefined);
+S.golfers=['111'];
+renderGuestStepper();
+assert.equal(plus.disabled,true,'A locked section keeps every control disabled.');
+assert.equal(plus.dataset.progressiveDisabled,'true','A button that should be enabled is tagged so unlock re-enables it.');
+assert.equal(minus.disabled,true);
+assert.equal(minus.dataset.progressiveDisabled,undefined);
+section.classList.remove('dim');
+renderGuestStepper();
+assert.equal(plus.disabled,false);
+assert.equal(plus.dataset.progressiveDisabled,undefined);
+assert.equal(minus.disabled,true);
+S.golfers=['111','222','333','444'];
+renderGuestStepper();
+assert.equal(plus.disabled,true,'An unlocked stepper follows the group limit.');
+assert.equal(plus.dataset.progressiveDisabled,undefined);
+S.golfers=['111'];
+changeGuests(1);
+assert.equal(minus.disabled,false);
+assert.equal(minus.dataset.progressiveDisabled,undefined);
+""")
+
+    def test_guest_stepper_is_described_for_screen_readers(self):
+        parser = _IdsAndAssets()
+        parser.feed(INDEX)
+        self.assertLessEqual({"guestHelp", "guestCountSpoken"}, parser.ids)
+        self.assertIn('aria-describedby="guestHelp"', INDEX)
+        count_tag = re.search(r'<span[^>]*id="guestCount"[^>]*>', INDEX).group(0)
+        self.assertNotIn("aria-live", count_tag, "The visible count must not announce on its own.")
+        spoken_tag = re.search(r'<span[^>]*id="guestCountSpoken"[^>]*>', INDEX).group(0)
+        self.assertIn('aria-live="polite"', spoken_tag)
+        self.assertIn("visually-hidden", spoken_tag)
+        self.assertIn(".visually-hidden", EXPERIENCE_CSS)
+        self.run_behavior("""
+const spoken=document.getElementById('guestCountSpoken');
+let value='', writes=0;
+Object.defineProperty(spoken,'textContent',{get(){return value;},set(next){writes++;value=next;},configurable:true});
+renderGuestStepper();
+assert.equal(value,'No guests');
+renderGuestStepper();
+assert.equal(writes,1,'An unchanged count must not be announced again.');
+changeGuests(1);
+assert.equal(value,'1 guest');
+changeGuests(1);
+assert.equal(value,'2 guests');
+renderGuestStepper();
+assert.equal(writes,3);
+changeGuests(-1);changeGuests(-1);
+assert.equal(value,'No guests');
+""")
+
+    def test_golfer_and_reset_paths_keep_the_guest_count_in_step(self):
+        build = _extract_function(INDEX, "buildGolfers")
+        card, after_loop = build.split("list.appendChild(c);", 1)
+        self.assertIn("syncGuestLimit", card, "Toggling a golfer card must re-check the guest limit.")
+        self.assertLess(card.index("clearResults()"), card.index("syncGuestLimit"))
+        self.assertLess(card.index("syncGuestLimit"), card.index("checkFetch()"))
+        self.assertIn("if(typeof syncGuestLimit==='function') syncGuestLimit();", after_loop,
+                      "Rebuilding the golfer list must re-render the stepper after the loop.")
+        reset = _extract_function(INDEX, "resetApp")
+        self.assertIn("S.guestCount=0", reset)
+        self.assertIn("renderGuestStepper", reset)
+        success = _extract_function(INDEX, "showSuccess")
+        self.assertIn("d.guest_count", success)
+        self.assertIn("<span>Guests</span>", success)
+        self.assertIn("syncGuestLimit", _extract_function(EXPERIENCE_JS, "applySelectedPreset"))
+
+    def test_guest_changes_clear_visible_results(self):
+        self.run_behavior("""
+const cleared=()=>'clearResults' in baseCalls;
+const reset=()=>{delete baseCalls.clearResults;};
+S.golfers=['111'];
+reset(); changeGuests(1);
+assert.equal(S.guestCount,1);
+assert.ok(cleared(),'Adding a guest must hide the old results.');
+reset(); changeGuests(-1);
+assert.equal(S.guestCount,0);
+assert.ok(cleared(),'Removing a guest must hide the old results.');
+reset(); changeGuests(-1);
+assert.equal(cleared(),false,'No change, nothing to clear.');
+S.golfers=['111','222','333'];
+changeGuests(1);
+reset(); changeGuests(1);
+assert.equal(S.guestCount,1);
+assert.equal(cleared(),false,'A push past the limit changes nothing, so the results stay.');
+reset(); syncGuestLimit();
+assert.equal(cleared(),false,'A count within the limit leaves the results alone.');
+S.golfers.push('444');
+reset(); syncGuestLimit();
+assert.equal(S.guestCount,0);
+assert.ok(cleared(),'Dropping a guest to fit the group must hide the old results.');
 """)
 
     def test_map_origin_is_used_once_unless_saving_is_selected(self):

@@ -12,6 +12,8 @@ from unittest.mock import Mock, patch
 
 from cryptography.fernet import Fernet
 
+import email_notifications
+
 
 class ApiTests(unittest.TestCase):
     @classmethod
@@ -92,12 +94,168 @@ class ApiTests(unittest.TestCase):
         self.worker.call.assert_not_called()
 
     def test_booking_passes_complete_context_and_preserves_unknown(self):
-        response = self.client.post("/api/book", json=self.booking(has_guests=True))
+        response = self.client.post("/api/book", json=self.booking(has_guests=True, guest_count=1))
         self.assertTrue(response.json["unknown"])
         kwargs = self.worker.call.call_args.kwargs
         self.assertTrue(kwargs["expected_has_guests"])
+        self.assertEqual(kwargs["expected_guest_count"], 1)
         self.assertEqual(kwargs["expected_course_type"], "Executive")
         self.assertEqual(kwargs["search_id"], "test-search")
+
+    def tee_search(self, **changes):
+        payload = self.booking(**changes)
+        for key in ("course", "time", "search_id"):
+            payload.pop(key)
+        return payload
+
+    def test_guest_count_must_be_a_small_whole_number(self):
+        for value in ("1", True, -1, 4, 1.5, None):
+            with self.subTest(value=value):
+                payload = self.tee_search(guest_count=value)
+                payload.pop("has_guests")
+                response = self.client.post("/api/tee-times", json=payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json["error"], "Choose between 0 and 3 guests.")
+                response = self.client.post("/api/book", json=dict(payload, course="Silver Lake", time="08:00", search_id="s"))
+                self.assertEqual(response.status_code, 400)
+        self.worker.call.assert_not_called()
+
+    def test_golfer_ids_must_be_ascii_digits(self):
+        for ids in (["\u0661\u0660\u0660\u0660\u0660\u0661"], ["10000\u00b2"], ["\uff11\uff10\uff10\uff10\uff10\uff11"]):
+            with self.subTest(ids=ids):
+                response = self.client.post("/api/tee-times", json=self.tee_search(golfer_ids=ids, num_golfers=1))
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json["error"], "Select distinct, valid golfer IDs.")
+        self.worker.call.assert_not_called()
+
+    def test_group_with_guests_cannot_exceed_four_players(self):
+        too_many = self.tee_search(golfer_ids=["111", "222", "333"], num_golfers=3, guest_count=2, has_guests=True)
+        response = self.client.post("/api/tee-times", json=too_many)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("at most 4 players", response.json["error"])
+        self.worker.call.assert_not_called()
+
+        self.worker.call.return_value = {"success": True, "times": [], "search_id": "s", "date_label": "Sat 9/12"}
+        fits = self.tee_search(golfer_ids=["111", "222"], num_golfers=2, guest_count=2, has_guests=True)
+        response = self.client.post("/api/tee-times", json=fits)
+        self.assertEqual(response.status_code, 200, response.json)
+        kwargs = self.worker.call.call_args.kwargs
+        self.assertEqual(kwargs["guest_count"], 2)
+        self.assertIs(kwargs["has_guests"], True)
+
+    def test_has_guests_without_a_count_is_refused(self):
+        payload = self.tee_search(has_guests=True)
+        self.assertNotIn("guest_count", payload)
+        response = self.client.post("/api/tee-times", json=payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("choose your guests again", response.json["error"])
+        mismatch = self.client.post("/api/tee-times", json=self.tee_search(has_guests=False, guest_count=1))
+        self.assertEqual(mismatch.status_code, 400)
+        self.worker.call.assert_not_called()
+
+    def test_search_without_has_guests_uses_the_count_alone(self):
+        self.worker.call.return_value = {"success": True, "times": [], "search_id": "s", "date_label": "Sat 9/12"}
+        payload = self.tee_search(guest_count=1)
+        payload.pop("has_guests")
+        self.assertEqual(self.client.post("/api/tee-times", json=payload).status_code, 200)
+        kwargs = self.worker.call.call_args.kwargs
+        self.assertEqual((kwargs["guest_count"], kwargs["has_guests"]), (1, True))
+        payload.pop("guest_count")
+        self.assertEqual(self.client.post("/api/tee-times", json=payload).status_code, 200)
+        kwargs = self.worker.call.call_args.kwargs
+        self.assertEqual((kwargs["guest_count"], kwargs["has_guests"]), (0, False))
+
+    def test_booking_passes_expected_guest_count(self):
+        payload = self.booking(guest_count=1)
+        payload.pop("has_guests")
+        self.client.post("/api/book", json=payload)
+        kwargs = self.worker.call.call_args.kwargs
+        self.assertEqual(kwargs["expected_guest_count"], 1)
+        self.assertIs(kwargs["expected_has_guests"], True)
+        self.client.post("/api/book", json=self.booking())
+        kwargs = self.worker.call.call_args.kwargs
+        self.assertEqual(kwargs["expected_guest_count"], 0)
+        self.assertIs(kwargs["expected_has_guests"], False)
+
+    def test_tee_times_log_names_guests_and_filters(self):
+        self.worker.call.return_value = {"success": True, "times": [], "search_id": "s", "date_label": "Sat 9/12"}
+        with self.assertLogs(self.api.app.logger, "INFO") as logs:
+            self.client.post("/api/tee-times", json=self.tee_search(guest_count=1, has_guests=True))
+        start = next(line for line in logs.output if "api.start" in line and "action=tee_times" in line)
+        for expected in ("guests=1", "region=all", "window=-", "num_golfers=1", "time_filter=None"):
+            self.assertIn(expected, start)
+        with self.assertLogs(self.api.app.logger, "INFO") as logs:
+            self.client.post("/api/tee-times", json=self.tee_search(
+                time_filter="all", region_filter="between-the-6s", time_from="08:00", time_to="10:30"))
+        start = next(line for line in logs.output if "api.start" in line and "action=tee_times" in line)
+        for expected in ("guests=0", "time_filter='all'", "region=between-the-6s", "window=08:00-10:30"):
+            self.assertIn(expected, start)
+        with self.assertLogs(self.api.app.logger, "INFO") as logs:
+            self.client.post("/api/book", json=self.booking(guest_count=2, has_guests=True))
+        start = next(line for line in logs.output if "api.start" in line and "action=book" in line)
+        self.assertTrue(start.endswith("guests=2"), start)
+
+    def test_booking_email_lists_guests(self):
+        def body(**extra):
+            with patch.object(email_notifications, "send_email", return_value=True) as send:
+                email_notifications.send_booking_confirmation(
+                    "fixture@example.invalid", "654321", "Silver Lake", "8:00 AM", "Saturday",
+                    golfer_names=["Pat Example"], **extra)
+            _, _, text, html = send.call_args.args
+            return text, html
+
+        text, html = body(guest_count=1)
+        self.assertIn("Golfers: Pat Example + 1 guest\n", text)
+        self.assertIn("Golfers: Pat Example + 1 guest</p>", html)
+        self.assertIn("Golfers: Pat Example + 3 guests\n", body(guest_count=3)[0])
+
+        for plain in (body()[0], body(guest_count=0)[0], body(guest_count=True)[0]):
+            self.assertIn("Golfers: Pat Example\n", plain)
+        with patch.object(email_notifications, "send_email", return_value=True) as send:
+            email_notifications.send_booking_confirmation(
+                "fixture@example.invalid", "1", "Silver Lake", "8:00 AM", "Saturday",
+                golfer_names=["<b>Pat</b>"], guest_count=2)
+        self.assertIn("&lt;b&gt;Pat&lt;/b&gt; + 2 guests", send.call_args.args[3])
+
+        result = {"reservation_no": "654321", "display_time": "8:00 AM", "date_label": "Saturday", "guest_count": 2}
+        recipient = self.api._booking_recipients(["111"], result, "Silver Lake", "golfer")[0]
+        self.assertEqual(recipient["payload"]["guest_count"], 2)
+        self.assertEqual(recipient["payload"]["golfer_names"], ["Test Golfer"])
+        del result["guest_count"]
+        # A booking without guests queues no guest_count at all (rollback safety).
+        self.assertNotIn("guest_count", self.api._booking_recipients(["111"], result, "Silver Lake", "golfer")[0]["payload"])
+
+    def test_booking_email_guest_line_edge_cases(self):
+        def golfers_line(names, guest_count):
+            with patch.object(email_notifications, "send_email", return_value=True) as send:
+                email_notifications.send_booking_confirmation(
+                    "fixture@example.invalid", "654321", "Silver Lake", "8:00 AM", "Saturday",
+                    golfer_names=names, guest_count=guest_count)
+            text = send.call_args.args[2]
+            return next(line for line in text.splitlines() if line.startswith("Golfers:"))
+
+        self.assertEqual(golfers_line([], 1), "Golfers: 1 guest")
+        self.assertEqual(golfers_line([], 3), "Golfers: 3 guests")
+        self.assertEqual(golfers_line([], 0), "Golfers: N/A")
+        self.assertEqual(golfers_line(["Pat Example", "Lee Sample"], 2), "Golfers: Pat Example, Lee Sample + 2 guests")
+        for odd in (10 ** 30, "2", True, 4, -1, 1.5, None):
+            with self.subTest(odd=odd):
+                self.assertEqual(golfers_line(["Pat Example"], odd), "Golfers: Pat Example")
+                self.assertEqual(golfers_line([], odd), "Golfers: N/A")
+
+    def test_guest_count_reaches_the_queued_confirmation(self):
+        self.worker.call.return_value = {
+            "success": True, "golfer_ids": ["111"], "reservation_no": "654321", "guest_count": 2,
+            "course": "Silver Lake", "display_time": "8:00 AM", "date_label": "Saturday, 9/12/2026",
+        }
+        response = self.client.post("/api/book", json=self.booking(guest_count=2, has_guests=True))
+        self.assertTrue(response.json["success"])
+        with closing(self.api.request_watches._connect()) as conn:
+            rows = [dict(r) for r in conn.execute("SELECT * FROM notification_outbox").fetchall()]
+        self.assertEqual(json.loads(rows[0]["payload"])["guest_count"], 2)
+        with patch.object(self.api, "send_booking_confirmation", return_value=True) as send:
+            self.api._send_pending_outbox()
+        self.assertEqual(send.call_args.kwargs["guest_count"], 2)
 
     def test_invalid_parties_do_not_reach_worker(self):
         for ids in [["111", "111"], ["111"] * 5, ["bad"]]:

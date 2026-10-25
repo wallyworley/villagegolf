@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import types
@@ -254,6 +255,148 @@ class DeleteService(GolfService):
 
     def _extract_reservations(self, _page):
         return [{"reservation_no": "123456"}]
+
+
+# glf109c as the Villages site returns it when it sends the golfer form back
+# (captured October 25, 2026, with synthetic names and IDs).
+GOLFER_FORM_BODY = (
+    "The Villages Tee Time System\nPat Example\nYour ID is: 100001\n\nClick here for Help\n\n"
+    "Play Date of Reservation:\nSelect a Play Date\n10/26/2026 - Monday\n10/27/2026 - Tuesday\n\n"
+    "Course\nView Open Times by Course\nView Open Times by Play Time\nAmberwood\nYankee Clipper\n"
+    "A Villages.net Account Owner(s) Must be one of the Players.\n\n"
+    "Enter 3 Golfers, arranging them in the groups you wish:\n"
+    "Golfer No.\tGuest?\tGolfer ID.\tName\tAdditional Information\n"
+    "Golfer 1\tNo Yes\n--Select From List--\nLee Sample 100002\nPat Example 100001\n"
+)
+GOLFER_FORM_OPTIONS = [
+    "Select a Play Date", "10/26/2026 - Monday", "10/27/2026 - Tuesday",
+    "View Open Times by Course", "View Open Times by Play Time", "Amberwood", "Yankee Clipper",
+    "--Select From List--", "Lee Sample 100002", "Pat Example 100001",
+]
+GOLFER_FORM_REPLY = {"golferForm": True, "options": GOLFER_FORM_OPTIONS, "rowMessages": []}
+NO_FORM_REPLY = {"golferForm": False, "options": [], "rowMessages": []}
+RECORDED_ROWS = object()  # the rows script answers with what the test typed
+
+
+class GolferFormLocator:
+    def __init__(self, page, selector):
+        self.page = page
+        self.selector = selector
+        self.first = self
+
+    def count(self):
+        return 1 if self.selector in self.page.present else 0
+
+    def _record(self, action, value=None):
+        self.page.actions.append((self.selector, action, value))
+
+    def fill(self, value):
+        self._record("fill", value)
+        match = re.fullmatch(r'input\[name="glfers(\d+)"\]', self.selector)
+        if match:
+            self.page.fields[int(match.group(1))] = value
+
+    def check(self):
+        self._record("check")
+        match = re.fullmatch(r'input\[name="guest(\d+)"\]\[value="([NY])"\]', self.selector)
+        if match:
+            self.page.flags[int(match.group(1))] = match.group(2)
+
+    def select_option(self, value):
+        self._record("select_option", value)
+        match = re.fullmatch(r'select\[name="buddy(\d+)"\]', self.selector)
+        if match:
+            self.page.fields[int(match.group(1))] = value
+
+    def click(self, **_kwargs):
+        self._record("click")
+        if self.selector == 'input[value="Submit"]':
+            self.page.submits += 1
+
+
+class GolferFormPage:
+    """A glf109c double that records every locator action. Which selectors
+    exist is driven by `present`; the golfer rows and the page's guest flags
+    (gst, "N" until a radio says otherwise) are tracked as the site's script
+    would track them."""
+
+    def __init__(self, rows=3, buddies=("100001", "100002"), body=GOLFER_FORM_BODY,
+                 form_state=NO_FORM_REPLY, rows_state=RECORDED_ROWS):
+        self.url = "https://example.test/glf109c"
+        self.body = body
+        self.form_state = form_state
+        self.rows_state = rows_state
+        self.present = {f'input[name="glfers{n}"]' for n in range(1, rows + 1)}
+        self.present |= {
+            f'select[name="buddy{n}"] option[value="{gid}"]'
+            for n in range(1, rows + 1) for gid in buddies
+        }
+        self.actions = []
+        self.waited = []
+        self.fields = {}
+        self.flags = {}
+        self.submits = 0
+
+    def locator(self, selector, **_kwargs):
+        return GolferFormLocator(self, selector)
+
+    def get_by_role(self, role, name=None, exact=False):
+        return GolferFormLocator(self, f"role={role}:{name}")
+
+    def wait_for_url(self, pattern, timeout=None):
+        self.waited.append(pattern)
+
+    def inner_text(self, _selector):
+        return self.body
+
+    def evaluate(self, script, *args):
+        if script == golf_service._GOLFER_ROWS_STATE_JS:
+            if self.rows_state is not RECORDED_ROWS:
+                return self.rows_state
+            count = args[0]
+            return {"ids": [self.fields.get(n, "") for n in range(1, count + 1)],
+                    "flags": [self.flags.get(n, "N") for n in range(1, count + 1)]}
+        if script == golf_service._GOLFER_FORM_STATE_JS:
+            return self.form_state
+        return []  # the tee time table scrape finds no rows
+
+    def guest_radios(self):
+        return [selector for selector, action, _ in self.actions
+                if action == "check" and selector.startswith('input[name="guest')]
+
+
+class GolferSearchService(GolfService):
+    """get_available_times against a GolferFormPage, with the login steps stubbed."""
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self._active = _Session()
+        self._active.page = page
+        self._active_user = "walter"
+
+    def _get_or_create_session(self, _username):
+        return None, self.page
+
+    def _ensure_logged_in(self, *_args):
+        pass
+
+    def _nav_to_glf109a(self, _page):
+        pass
+
+    def _capture_before_state(self, _page, _username):
+        return set()
+
+
+def search_with_guests(page, ids, guest_count=0, has_guests=None, num_golfers=None):
+    service = GolferSearchService(page)
+    result = service.get_available_times(
+        "walter", "pw", "pin", "20261026", "Monday, Oct 26", "Championship", "all",
+        ids, len(ids) if num_golfers is None else num_golfers,
+        guest_count > 0 if has_guests is None else has_guests,
+        guest_count=guest_count,
+    )
+    return service, result
 
 
 class GolfServiceTests(unittest.TestCase):
@@ -548,6 +691,281 @@ class GolfServiceTests(unittest.TestCase):
         self.assertEqual(result["golfer_ids"], ["483204", "640405"])
         self.assertEqual(result["num_golfers"], 2)
         self.assertTrue(result["has_guests"])
+
+    def test_booking_success_reports_guest_count(self):
+        context = {
+            "date_str": "20260910", "play_date": "2026-09-10", "golfer_ids": ["100001", "100002"],
+            "num_golfers": 2, "has_guests": True, "guest_count": 1, "search_id": "search-1",
+        }
+        service = GolfService()
+        self.assertEqual(service._booking_success("812345", "Southern Oaks", "02:05", context)["guest_count"], 1)
+        del context["guest_count"]
+        self.assertEqual(service._booking_success("812345", "Southern Oaks", "02:05", context)["guest_count"], 0)
+
+    def test_golfer_page_message_reads_the_line_above_the_golfer_table(self):
+        message = golf_service._golfer_page_message(GOLFER_FORM_BODY, GOLFER_FORM_OPTIONS, [])
+        self.assertEqual(message, "A Villages.net Account Owner(s) Must be one of the Players.")
+
+    def test_golfer_page_message_is_empty_on_a_normal_golfer_page(self):
+        body = GOLFER_FORM_BODY.replace("A Villages.net Account Owner(s) Must be one of the Players.\n", "")
+        self.assertEqual(golf_service._golfer_page_message(body, GOLFER_FORM_OPTIONS, []), "")
+        self.assertEqual(golf_service._golfer_page_message("", [], []), "")
+        self.assertEqual(golf_service._golfer_page_message("No golfer table here\nJust text", [], []), "")
+
+    def test_golfer_page_message_adds_row_notes(self):
+        message = golf_service._golfer_page_message(
+            GOLFER_FORM_BODY, GOLFER_FORM_OPTIONS, [" ", "Golfer 100002 already has a tee time"],
+        )
+        self.assertTrue(message.endswith("Golfer 100002 already has a tee time"))
+        self.assertTrue(message.startswith("A Villages.net Account Owner(s)"))
+        # A note the page already printed above the table is not repeated.
+        again = golf_service._golfer_page_message(
+            GOLFER_FORM_BODY, GOLFER_FORM_OPTIONS,
+            ["A Villages.net  Account Owner(s) Must be one of the Players."],
+        )
+        self.assertEqual(again, "A Villages.net Account Owner(s) Must be one of the Players.")
+        # Without the table heading, only the row notes remain.
+        self.assertEqual(
+            golf_service._golfer_page_message("Some page", [], ["Golfer 100002 already has a tee time"]),
+            "Golfer 100002 already has a tee time",
+        )
+
+    def test_golfer_page_message_takes_at_most_three_lines_and_stops_at_an_option(self):
+        body = "one\ntwo\nthree\nfour\nEnter 2 Golfers, arranging them:\n"
+        self.assertEqual(golf_service._golfer_page_message(body, [], []), "two three four")
+        body = "one\ntwo\nthree\nEnter 2 Golfers, arranging them:\n"
+        self.assertEqual(golf_service._golfer_page_message(body, ["two\u00a0"], []), "three")
+        self.assertEqual(len(golf_service._golfer_page_message("word " * 200 + "\nEnter 1 Golfers", [], [])), 300)
+
+    def test_search_rejected_by_the_site_reports_its_message(self):
+        page = GolferFormPage(form_state=GOLFER_FORM_REPLY)
+        with self.assertLogs("golf_service", "WARNING") as logs:
+            service, result = search_with_guests(page, ["100001", "100002", "100003"])
+        self.assertFalse(result["success"])
+        self.assertNotIn("times", result)
+        self.assertIn("Account Owner(s) Must be one of the Players", result["error"])
+        self.assertTrue(result["error"].startswith("The Villages site said: \u201c"))
+        self.assertEqual(page.submits, 1)
+        self.assertTrue(any("sent the golfer page back" in line for line in logs.output))
+        self.assertIsNone(service._active, "A rejected search must not leave a bookable session.")
+
+    def test_search_rejected_without_a_message_says_so(self):
+        body = GOLFER_FORM_BODY.replace("A Villages.net Account Owner(s) Must be one of the Players.\n", "")
+        page = GolferFormPage(body=body, form_state=GOLFER_FORM_REPLY)
+        with self.assertLogs("golf_service", "WARNING"):
+            _, result = search_with_guests(page, ["100001", "100002", "100003"])
+        self.assertFalse(result["success"])
+        self.assertEqual(
+            result["error"],
+            "The Villages site didn't accept these golfers. Check your group and search again.",
+        )
+
+    def test_search_accepted_by_the_site_returns_the_tee_time_list(self):
+        page = GolferFormPage(rows=1, buddies=("100001",))
+        service, result = search_with_guests(page, ["100001"])
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["times"], [])
+        self.assertEqual(page.waited[-1], "**/glf109e**")
+        self.assertEqual(service._active.search_context["guest_count"], 0)
+
+    def test_guest_rows_use_the_signed_in_golfers_id(self):
+        page = GolferFormPage(rows=3)
+        service, result = search_with_guests(page, ["100001", "100002"], guest_count=1)
+        self.assertTrue(result["success"], result)
+        self.assertIn(('table input[type="text"]', "fill", "3"), page.actions,
+                      "glf109b must ask for the whole party, guests included.")
+        self.assertIn(('input[value="Y"]', "check", None), page.actions)
+        self.assertEqual(page.guest_radios(), [
+            'input[name="guest1"][value="N"]',
+            'input[name="guest2"][value="N"]',
+            'input[name="guest3"][value="Y"]',
+        ])
+        self.assertEqual(page.fields, {1: "100001", 2: "100002", 3: "100001"})
+        self.assertEqual(page.flags, {1: "N", 2: "N", 3: "Y"})
+        self.assertIn(('select[name="playdate"]', "select_option", "20261026"), page.actions)
+        self.assertIn(('select[name="reqcs"]', "select_option", "98"), page.actions)
+        self.assertEqual(page.submits, 1)
+        context = service._active.search_context
+        self.assertEqual((context["num_golfers"], context["guest_count"], context["has_guests"]), (2, 1, True))
+        self.assertEqual(context["golfer_ids"], ["100001", "100002"])
+
+    def test_guests_require_the_signed_in_golfer_in_the_group(self):
+        page = GolferFormPage(rows=2, buddies=("100001", "100002"))
+        _, result = search_with_guests(page, ["100002"], guest_count=1)
+        self.assertFalse(result["success"])
+        self.assertIn("select yourself", result["error"])
+        self.assertEqual(page.submits, 0)
+        self.assertEqual(page.guest_radios(), [])
+
+    def test_guests_refused_without_a_golfer_id_on_the_page(self):
+        page = GolferFormPage(rows=2, body=GOLFER_FORM_BODY.replace("Your ID is: 100001\n", ""))
+        _, result = search_with_guests(page, ["100001"], guest_count=1)
+        self.assertFalse(result["success"])
+        self.assertIn("couldn't read your golfer ID", result["error"])
+        self.assertEqual(page.submits, 0)
+        self.assertEqual(page.guest_radios(), [])
+
+    def test_search_refuses_when_the_golfer_page_has_too_few_rows(self):
+        page = GolferFormPage(rows=2)
+        _, result = search_with_guests(page, ["100001", "100002"], guest_count=1)
+        self.assertFalse(result["success"])
+        self.assertIn("didn't match your group", result["error"])
+        self.assertEqual(page.submits, 0)
+        self.assertEqual(page.fields, {})
+
+    def test_search_refuses_when_the_golfer_page_has_extra_rows(self):
+        page = GolferFormPage(rows=4)
+        _, result = search_with_guests(page, ["100001", "100002"], guest_count=1)
+        self.assertFalse(result["success"])
+        self.assertIn("didn't match your group", result["error"])
+        self.assertEqual(page.submits, 0)
+
+    def test_search_refuses_when_a_row_did_not_take(self):
+        cases = {
+            "wrong id": {"ids": ["100001", "999999", "100001"], "flags": ["N", "N", "Y"]},
+            "blank id": {"ids": ["100001", "100002", ""], "flags": ["N", "N", "Y"]},
+            "guest flag lost": {"ids": ["100001", "100002", "100001"], "flags": ["N", "N", "N"]},
+            "no answer": None,
+        }
+        for label, state in cases.items():
+            with self.subTest(label):
+                page = GolferFormPage(rows=3, rows_state=state)
+                with self.assertLogs("golf_service", "WARNING") as logs:
+                    _, result = search_with_guests(page, ["100001", "100002"], guest_count=1)
+                self.assertFalse(result["success"])
+                self.assertIn("couldn't fill in every golfer", result["error"])
+                self.assertEqual(page.submits, 0)
+                self.assertTrue(any("did not take" in line for line in logs.output))
+        page = GolferFormPage(rows=2, rows_state={"ids": ["100001", "100002"], "flags": ["N", "Y"]})
+        with self.assertLogs("golf_service", "WARNING"):
+            _, result = search_with_guests(page, ["100001", "100002"])
+        self.assertFalse(result["success"], "A guest flag with no guests requested must stop the search.")
+        self.assertEqual(page.submits, 0)
+
+    def test_search_without_guests_never_touches_guest_radios(self):
+        page = GolferFormPage(rows=2, buddies=("100001",))
+        _, result = search_with_guests(page, ["100001", "100002"])
+        self.assertTrue(result["success"], result)
+        self.assertEqual(page.guest_radios(), [])
+        self.assertIn(('input[value="N"]', "check", None), page.actions)
+        self.assertNotIn(('input[value="Y"]', "check", None), page.actions)
+        self.assertIn(('table input[type="text"]', "fill", "2"), page.actions)
+        # Row one comes from the buddy list; row two is typed because the list lacks it.
+        self.assertIn(('select[name="buddy1"]', "select_option", "100001"), page.actions)
+        self.assertIn(('input[name="glfers2"]', "fill", "100002"), page.actions)
+        self.assertEqual(page.fields, {1: "100001", 2: "100002"})
+        self.assertEqual(page.submits, 1)
+
+    def test_search_refuses_guest_counts_that_do_not_fit_the_group(self):
+        cases = {
+            "four golfers and a guest": (["100001", "100002", "100003", "100004"], 1, True, None),
+            "three golfers and two guests": (["100001", "100002", "100003"], 2, True, None),
+            "more than three guests": (["100001"], 4, True, None),
+            "negative guests": (["100001"], -1, False, None),
+            "a boolean count": (["100001"], True, True, None),
+            "a text count": (["100001"], "1", True, None),
+            "guests without a flag": (["100001"], 1, False, None),
+            "a flag without guests": (["100001"], 0, True, None),
+        }
+        for label, (ids, guest_count, has_guests, num_golfers) in cases.items():
+            with self.subTest(label):
+                page = GolferFormPage(rows=4)
+                service = GolferSearchService(page)
+                result = service.get_available_times(
+                    "walter", "pw", "pin", "20261026", "Monday", "Championship", "all",
+                    ids, len(ids), has_guests, guest_count=guest_count,
+                )
+                self.assertFalse(result["success"])
+                self.assertIn("Your guests changed", result["error"])
+                self.assertEqual(page.actions, [], "Nothing may be typed or clicked for a group that cannot fit.")
+        page = GolferFormPage(rows=2)
+        result = GolferSearchService(page).get_available_times(
+            "walter", "pw", "pin", "20261026", "Monday", "Championship", "all",
+            ["100001"], 2, False,
+        )
+        self.assertFalse(result["success"])
+        self.assertIn("Your golfers changed", result["error"])
+        self.assertEqual(page.actions, [])
+
+    def test_search_refuses_an_id_outside_the_villages_range(self):
+        page = GolferFormPage(rows=2)
+        _, result = search_with_guests(page, ["100001", "99999"])
+        self.assertFalse(result["success"])
+        self.assertIn("99999", result["error"])
+        self.assertIn("isn't a valid Villages golfer ID", result["error"])
+        self.assertEqual(page.actions, [], "Nothing may be typed or clicked, including the glf109b count.")
+        self.assertEqual(page.submits, 0)
+        for bad in ("100000", "999991", "1000010", "00100001", "abc123", "\u0661\u0660\u0660\u0660\u0660\u0661", ""):
+            with self.subTest(bad):
+                page = GolferFormPage(rows=2)
+                _, result = search_with_guests(page, ["100001", bad or " 12 "])
+                self.assertFalse(result["success"])
+                self.assertIn("valid Villages golfer ID", result["error"])
+                self.assertEqual(page.actions, [])
+        # The range check comes before the guest checks, and the range ends are valid.
+        for edge in ("100001", "999990"):
+            page = GolferFormPage(rows=1, buddies=(edge,))
+            _, result = search_with_guests(page, [edge])
+            self.assertTrue(result["success"], (edge, result))
+
+    def test_search_rejection_includes_row_notes(self):
+        reply = dict(GOLFER_FORM_REPLY, rowMessages=["Golfer 100002 already has a tee time"])
+        page = GolferFormPage(form_state=reply)
+        with self.assertLogs("golf_service", "WARNING"):
+            _, result = search_with_guests(page, ["100001", "100002", "100003"])
+        self.assertFalse(result["success"])
+        self.assertIn("Golfer 100002 already has a tee time", result["error"])
+        self.assertIn("Account Owner(s) Must be one of the Players", result["error"])
+
+    def test_guest_booking_allocates_the_whole_party(self):
+        page = DeclinedReplyPage(VILLAGES_HEADER + "No reservation number here.")
+        page.evaluated = []
+        page.evaluate = lambda _script, args=None: page.evaluated.append(args)
+        tee_row = FakeElement(attrs={"cells": [
+            FakeElement(child=page.link),
+            FakeElement("Southern Oaks"),
+            FakeElement("02:05"),
+        ]})
+        page.query_selector_all = lambda _selector, calls=iter([[tee_row], [page.allocation]]): next(calls)
+        context = {
+            "user": "walter", "date_str": "20260910", "play_date": "2026-09-10",
+            "date_label": "Thursday, Sep 10", "course_type": "Executive",
+            "golfer_ids": ["100001", "100002"], "num_golfers": 2, "has_guests": True, "guest_count": 1,
+            "search_id": "search-1", "offered_times": [("Southern Oaks", "02:05")],
+            "preexisting_reservation_ids": set(),
+        }
+        with self.assertLogs("golf_service", "WARNING"):
+            DeclinedReplyService(page, context).book_tee_time(
+                "walter", "pw", "pin", "Southern Oaks", "02:05",
+                expected_date="20260910", expected_golfer_ids=["100001", "100002"],
+                expected_num_golfers=2, expected_course_type="Executive",
+                expected_has_guests=True, search_id="search-1", expected_guest_count=1,
+            )
+        self.assertEqual(page.allocation.attrs["text_input"].filled, "3")
+        self.assertEqual(page.evaluated, [{"rowNum": 2, "numGolfers": 3}])
+
+    def test_booking_refuses_a_changed_guest_count(self):
+        page = SubmitRaisesPage()
+        context = {
+            "user": "walter", "date_str": "20260910", "play_date": "2026-09-10",
+            "date_label": "Thursday, Sep 10", "course_type": "Executive",
+            "golfer_ids": ["100001"], "num_golfers": 1, "has_guests": False, "guest_count": 0,
+            "search_id": "search-1", "offered_times": [("Southern Oaks", "02:05")],
+            "preexisting_reservation_ids": set(),
+        }
+        for label, expected in (("one more guest", 1), ("text", "many"), ("unreadable", object())):
+            with self.subTest(label):
+                result = BookingBoundaryService(page, context).book_tee_time(
+                    "walter", "pw", "pin", "Southern Oaks", "02:05",
+                    expected_date="20260910", expected_golfer_ids=["100001"],
+                    expected_num_golfers=1, expected_course_type="Executive",
+                    search_id="search-1", expected_guest_count=expected,
+                )
+                self.assertFalse(result["success"])
+                self.assertNotIn("unknown", result)
+                self.assertIn("Your guests changed since you searched", result["error"])
+                self.assertEqual(page.row_calls, 0, "No tee time row may be clicked.")
+                self.assertFalse(page.link.clicked)
 
     def test_request_golfers_must_be_unique_numeric_and_all_selected(self):
         service = GolfService()

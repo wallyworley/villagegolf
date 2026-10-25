@@ -183,9 +183,18 @@ def send_request_result(recipient_email, result, play_date_label,
 
 
 def send_booking_confirmation(recipient_email, reservation_no, course, display_time,
-                              date_label, golfer_names):
-    """Send a booking confirmation email."""
-    golfers_str = ", ".join(golfer_names) if golfer_names else "N/A"
+                              date_label, golfer_names, guest_count=0):
+    """Send a booking confirmation email. Queued rows from before guests were
+    supported carry no guest_count, so it defaults to 0."""
+    guests = (guest_count if isinstance(guest_count, int) and not isinstance(guest_count, bool)
+              and 1 <= guest_count <= 3 else 0)
+    guest_str = "" if not guests else ("1 guest" if guests == 1 else f"{guests} guests")
+    if golfer_names:
+        golfers_str = ", ".join(golfer_names)
+        if guest_str:
+            golfers_str += f" + {guest_str}"
+    else:
+        golfers_str = guest_str or "N/A"
     subject = f"Tee Time Confirmed: {course} at {display_time}"
     text = (
         f"Tee Time Confirmed!\n\n"

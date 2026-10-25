@@ -460,3 +460,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 
 /* Status bar backdrop for the installed app (black-translucent status bar). Height is 0 in a browser tab. */
 body::before { content:""; position:fixed; top:0; left:0; right:0; height:env(safe-area-inset-top); background:var(--g1); z-index:90; pointer-events:none; }
+
+/* Guest count stepper in Course & Guests: 44px tap targets, dimmed at either limit. */
+.guest-stepper { display:flex; flex:none; align-items:center; gap:6px; margin-left:12px; }
+.step-btn { width:44px; height:44px; border:1.5px solid var(--g3); border-radius:50%; background:var(--card); color:var(--ink-accent); font-size:24px; font-weight:800; line-height:1; cursor:pointer; }
+.sec .guest-stepper .step-btn:disabled { opacity:.4; cursor:default; }
+.step-val { min-width:28px; text-align:center; color:var(--ink-strong); font-size:20px; font-weight:800; }
